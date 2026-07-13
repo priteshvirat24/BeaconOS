@@ -146,10 +146,24 @@ All external interaction flows through five dedicated **MCP Servers**:
 4. **Operations Server**: Manages task lifecycles, decision ledgers, and action workflows.
 5. **Verification Server**: Evaluates claim freshness, flags source inconsistencies, and compares conflicting payloads.
 
-### 4. Interactive Command Surfaces (Slack Block Kit)
+### 4. Real-Time Search (RTS) — internal context, within consent boundaries
+The Workspace Investigator reads live internal context through Slack's **Real-Time Search API**
+(`assistant.search.context`, `src/beacon/slack/search.py`) using the coordinator's **user
+token** and the granular `search:read.*` scopes. Consent is enforced in code: direct messages
+(`im`/`mpim`) are excluded by default, the agent never ingests its own bot posts, and Beacon
+only ever sees what the authenticating coordinator can already see. This guarantee is covered
+by a real test (`tests/test_slack_search.py`) that simulates Slack's access boundary.
+
+### 5. Interactive Command Surfaces (Slack Block Kit)
 Coordination is handled entirely within Slack via 20+ custom Block Kit designs including:
-- **App Home Command Center**: Real-time stats dashboard displaying active crises, pending approvals, at-risk tasks, and active coordinator missions.
-- **Situation Briefs**: Formatted fields summarizing event impact, evidence, verified facts, and gaps.
+- **App Home Command Center**: Active crises ordered most-urgent-first, with a one-click path
+  into the live Mission Timeline for each crisis.
+- **🛰️ Mission Timeline**: A single message that updates progressively via `chat.update` off
+  real LangGraph node completions, so multi-agent reasoning is visible in near-real-time (not a
+  scripted animation).
+- **Situation Briefs + Sources & Visibility footer**: Every brief ends with an always-on,
+  honest provenance line — how many channels and evidence items it drew from, *0 private
+  conversations* (mechanically computed), and each claim's confidence.
 - **Approval requests**: Interactive buttons that register human decisions directly in the immutable `DecisionLedger` service.
 
 ---
@@ -217,17 +231,39 @@ Executes a dry-run simulating database connection, Redis set/get caching, event 
 python -m scratch.verify_services
 ```
 
+### Replay a real scenario (no live Slack needed)
+Replays a **real, disclosed** hazard event through the exact same normalizer, threshold, and
+six-agent pipeline as live polling (no demo-mode branch), driving the live Mission Timeline and
+a Situation Brief with its Sources & Visibility footer:
+```bash
+python -m scratch.replay_event                 # list real scenarios
+python -m scratch.replay_event ridgecrest      # real USGS M7.1 earthquake
+python -m scratch.replay_event midland_flood   # real NWS flash-flood warning
+python -m scratch.security_demo                # injection neutralized + PII redacted
+```
+
 ### Start the Application
 To boot the FastAPI server and launch all periodic pollers (USGS, GDACS, and NWS):
 ```bash
 python -m beacon.main
 ```
 
+For a full cold-start sequence (Docker → migrate → verify → demo), see
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md). Submission narrative and demo script:
+[`SUBMISSION.md`](SUBMISSION.md), [`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md).
+
 ---
 
 ## 🛡️ Security & Policy Enforcement
-- **Prompt Injection Defense**: Content sanitization filters out instructions attempting role overrides or system instruction bypasses.
-- **PII & Token Redaction**: Redacts credit cards, emails, SSNs, phone numbers, and credentials before logging or passing to external model APIs.
+- **Prompt Injection Defense**: Untrusted workspace content passes through a single choke point
+  (`sanitize_external_content`, wired into the Workspace Investigator's evidence path) that
+  neutralizes role-override / instruction-bypass spans on the **model-bound payload** — before
+  it becomes evidence or reaches the LLM — and logs the event.
+- **PII & Token Redaction**: The same choke point redacts credit cards, emails, SSNs, and phone
+  numbers before content reaches the model or logs. (Demo: `python -m scratch.security_demo`.)
+- **Consent & data minimization**: RTS uses the coordinator's user token, excludes direct
+  messages by construction, and surfaces a Sources & Visibility footer with a mechanically
+  computed *0 private conversations*.
 - **Authority Levels**: Gated operations mapping (e.g. `L0_OBSERVE` to `L4_EXECUTE_OPERATIONAL`) ensures that agents cannot execute write actions on Slack or change database configurations without proper credentials.
 
 ---

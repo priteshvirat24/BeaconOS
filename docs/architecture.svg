@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 600" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#5b6472"/>
+    </marker>
+    <style>
+      .col-title { font-size: 15px; font-weight: 700; fill: #1b2733; }
+      .box { fill: #ffffff; stroke: #c7ced8; stroke-width: 1.5; rx: 8; }
+      .box-t { font-size: 12.5px; fill: #1b2733; }
+      .sub { font-size: 11px; fill: #5b6472; }
+      .badge { font-size: 10.5px; font-weight: 700; }
+      .flow { stroke: #5b6472; stroke-width: 2; fill: none; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="28" y="38" font-size="22" font-weight="800" fill="#0f1721">🛡️ Beacon Command</text>
+  <text x="28" y="60" font-size="13.5" fill="#5b6472">Evidence-grounded crisis intelligence: live world events → agentic reasoning (MCP + Real-Time Search) → evidence-graded claims → coordinated Slack action</text>
+
+  <!-- Column headers -->
+  <text x="40"  y="98" class="col-title">1 · Live World Events</text>
+  <text x="300" y="98" class="col-title">2 · Agentic Reasoning (LangGraph)</text>
+  <text x="620" y="98" class="col-title">3 · Evidence-Graded Claims</text>
+  <text x="850" y="98" class="col-title">4 · Coordinated Action in Slack</text>
+
+  <!-- Column 1: sources -->
+  <rect class="box" x="40" y="118" width="210" height="40" rx="8"/>
+  <text class="box-t" x="52" y="135">USGS earthquakes</text><text class="sub" x="52" y="150">GeoJSON pollers</text>
+  <rect class="box" x="40" y="168" width="210" height="40" rx="8"/>
+  <text class="box-t" x="52" y="185">GDACS global alerts</text><text class="sub" x="52" y="200">RSS / GeoRSS</text>
+  <rect class="box" x="40" y="218" width="210" height="40" rx="8"/>
+  <text class="box-t" x="52" y="235">NWS severe weather</text><text class="sub" x="52" y="250">weather.gov API</text>
+  <rect class="box" x="40" y="284" width="210" height="46" rx="8" fill="#eef4ff" stroke="#9db8e8"/>
+  <text class="box-t" x="52" y="303" font-weight="700">Normalize · Severity · Threshold</text>
+  <text class="sub" x="52" y="319">shared by live poll + replay</text>
+
+  <!-- Column 2: agents -->
+  <g>
+    <rect class="box" x="300" y="118" width="290" height="34" rx="7"/>
+    <text class="box-t" x="312" y="139">🧭 Triage — deterministic + LLM severity</text>
+    <rect class="box" x="300" y="158" width="290" height="34" rx="7" fill="#eafaf1" stroke="#8fd6ad"/>
+    <text class="box-t" x="312" y="179">🔎 Workspace Investigator</text>
+    <text class="badge" x="500" y="179" fill="#1a7f46">RTS</text>
+    <rect class="box" x="300" y="198" width="290" height="34" rx="7" fill="#fef6ea" stroke="#e8c48f"/>
+    <text class="box-t" x="312" y="219">🌐 External Intelligence</text>
+    <text class="badge" x="500" y="219" fill="#a6631a">MCP</text>
+    <rect class="box" x="300" y="238" width="290" height="34" rx="7"/>
+    <text class="box-t" x="312" y="259">🧪 Evidence Synthesizer — claims</text>
+    <rect class="box" x="300" y="278" width="290" height="34" rx="7"/>
+    <text class="box-t" x="312" y="299">🗺️ Response Planner — task DAG</text>
+    <rect class="box" x="300" y="318" width="290" height="34" rx="7"/>
+    <text class="box-t" x="312" y="339">🛡️ Red-Team Critic — risk flags</text>
+    <!-- vertical flow through agents -->
+    <path class="flow" d="M310,152 L310,158 M310,192 L310,198 M310,232 L310,238 M310,272 L310,278 M310,312 L310,318" marker-end="url(#arrow)"/>
+  </g>
+  <text class="sub" x="300" y="372">accumulating world model threads through every stage · Postgres-checkpointed</text>
+
+  <!-- Column 3: claims -->
+  <rect class="box" x="620" y="118" width="200" height="40" rx="8"/>
+  <text class="box-t" x="632" y="135">Raw evidence nodes</text><text class="sub" x="632" y="150">source + permalink</text>
+  <rect class="box" x="620" y="176" width="200" height="86" rx="8" fill="#f6f8fb"/>
+  <text class="box-t" x="632" y="196" font-weight="700">Versioned claims</text>
+  <text class="sub" x="632" y="214">🟢 verified_fact</text>
+  <text class="sub" x="632" y="230">🔵 supported_inference</text>
+  <text class="sub" x="632" y="246">🟡 weak_inference · 🔴 contested</text>
+  <rect class="box" x="620" y="280" width="200" height="56" rx="8"/>
+  <text class="box-t" x="632" y="300">Response plan = task DAG</text>
+  <text class="sub" x="632" y="318">dependency-aware, cites claims only</text>
+
+  <!-- Column 4: slack -->
+  <rect class="box" x="850" y="118" width="170" height="52" rx="8" fill="#eef4ff" stroke="#9db8e8"/>
+  <text class="box-t" x="862" y="138" font-weight="700">🛰️ Mission Timeline</text>
+  <text class="sub" x="862" y="156">live, progressive (chat.update)</text>
+  <rect class="box" x="850" y="182" width="170" height="60" rx="8"/>
+  <text class="box-t" x="862" y="202" font-weight="700">Situation Brief</text>
+  <text class="sub" x="862" y="220">+ Sources &amp; Visibility</text>
+  <text class="sub" x="862" y="234">footer (provenance)</text>
+  <rect class="box" x="850" y="254" width="170" height="44" rx="8"/>
+  <text class="box-t" x="862" y="274">Approval gates</text>
+  <text class="sub" x="862" y="290">human-in-the-loop</text>
+
+  <!-- cross-column flows -->
+  <path class="flow" d="M250,300 L300,220" marker-end="url(#arrow)"/>
+  <path class="flow" d="M590,255 L620,138" marker-end="url(#arrow)"/>
+  <path class="flow" d="M590,300 L620,305" marker-end="url(#arrow)"/>
+  <path class="flow" d="M820,140 L850,142" marker-end="url(#arrow)"/>
+  <path class="flow" d="M820,225 L850,208" marker-end="url(#arrow)"/>
+
+  <!-- consent banner -->
+  <rect x="40" y="410" width="980" height="46" rx="10" fill="#0f1721"/>
+  <text x="60" y="430" font-size="13" font-weight="700" fill="#ffffff">🔒 Consent by construction</text>
+  <text x="60" y="448" font-size="12" fill="#cfd8e3">Coordinator's user token only · never reads DMs · never ingests its own posts · PII redacted &amp; prompt-injection neutralized before the model · every claim shows its confidence</text>
+
+  <!-- beyond slack -->
+  <rect class="box" x="40" y="474" width="980" height="40" rx="10" fill="#f6f8fb" stroke="#c7ced8"/>
+  <text x="60" y="499" font-size="12.5" fill="#1b2733"><tspan font-weight="700">Beyond one workspace:</tspan> over Slack Connect, the brief + task DAG become a shared coordination surface across responding organizations — each coordinator still sees only what their own token permits.</text>
+</svg>
