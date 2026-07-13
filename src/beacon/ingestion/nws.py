@@ -132,7 +132,7 @@ class NWSPoller:
                 description=description[:5000] if description else None,
                 latitude=lat,
                 longitude=lon,
-                location_name=", ".join(props.get("areaDesc", "").split(",")[:3]),
+                location_name=", ".join(props.get("areaDesc", "").replace("\n", " ").split(";")[:3])[:497],
                 severity=severity,
                 severity_score=severity_score,
                 alert_level=severity_str,
