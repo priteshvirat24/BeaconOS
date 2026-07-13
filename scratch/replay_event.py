@@ -188,6 +188,12 @@ async def replay(
 
     Returns the final pipeline state (plus ``_brief`` blocks) for inspection.
     """
+    from beacon.config import get_settings
+    from beacon.db import init_engine
+
+    settings = get_settings()
+    init_engine(settings.database_url)
+
     scenario = SCENARIOS[scenario_key]
     normalized = _normalize(scenario)
 
@@ -260,6 +266,8 @@ async def replay(
             elif block["type"] == "context":
                 print("  · " + block["elements"][0]["text"])
 
+    from beacon.db import close_engine
+    await close_engine()
     return state
 
 
