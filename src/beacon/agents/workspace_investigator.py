@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -19,7 +17,6 @@ from beacon.agents.base import (
     AgentContext,
     AgentResult,
     EvidenceCandidate,
-    ClaimProposal,
     GapProposal,
     ToolTrace,
 )
@@ -59,7 +56,7 @@ class WorkspaceInvestigator(AgentBase):
 
     @property
     def system_prompt(self) -> str:
-        return """You are the Beacon Workspace Investigator. You search the organization's Slack 
+        return """You are the Beacon Workspace Investigator. You search the organization's Slack
 workspace to find information relevant to an active crisis.
 
 You operate iteratively:
@@ -121,25 +118,11 @@ Do NOT search for the same query twice unless you're paginating results."""
                 result.tool_traces.append(trace)
 
                 if search_results:
-                    # Convert to evidence candidates
+                    # Convert to evidence candidates (via the security choke point)
                     for sr in search_results:
-                        ev = EvidenceCandidate(
-                            source_type="slack_rts",
-                            source_provider="slack_search",
-                            normalized_content=sr["text"][:5000],
-                            raw_content_hash=hashlib.sha256(sr["text"].encode()).hexdigest(),
-                            source_uri=sr.get("permalink"),
-                            slack_permalink=sr.get("permalink"),
-                            reliability_score=0.6,
-                            metadata={
-                                "channel_id": sr.get("channel_id"),
-                                "channel_name": sr.get("channel_name"),
-                                "user": sr.get("username"),
-                                "timestamp": sr.get("timestamp"),
-                                "query": decision.query,
-                            },
+                        result.evidence_candidates.append(
+                            self._search_result_to_evidence(sr, decision.query)
                         )
-                        result.evidence_candidates.append(ev)
 
                     result.observations.append(
                         f"Search '{decision.query}': {len(search_results)} results"
@@ -167,6 +150,54 @@ Do NOT search for the same query twice unless you're paginating results."""
         )
         return result
 
+    def _search_result_to_evidence(
+        self, sr: dict[str, Any], query: str
+    ) -> EvidenceCandidate:
+        """Convert a raw Slack search hit into evidence, sanitized for the LLM.
+
+        Untrusted workspace text passes through the security choke point here —
+        before it is stored as evidence or placed in any model prompt — so
+        prompt-injection spans are neutralized and PII is redacted on the
+        model-bound payload itself. The dedup hash is computed over the original
+        text to preserve identity.
+        """
+        from beacon.security import sanitize_external_content
+
+        raw_text = sr.get("text", "") or ""
+        safe_text, security_report = sanitize_external_content(raw_text)
+
+        if security_report["injection"]:
+            logger.warning(
+                "prompt_injection_neutralized",
+                pattern=security_report["injection_pattern"],
+                channel=sr.get("channel_name"),
+                query=query,
+            )
+        if security_report["pii_count"]:
+            logger.info(
+                "pii_redacted",
+                pii_types=security_report["pii_types"],
+                channel=sr.get("channel_name"),
+            )
+
+        return EvidenceCandidate(
+            source_type="slack_rts",
+            source_provider="slack_search",
+            normalized_content=safe_text[:5000],
+            raw_content_hash=hashlib.sha256(raw_text.encode()).hexdigest(),
+            source_uri=sr.get("permalink"),
+            slack_permalink=sr.get("permalink"),
+            reliability_score=0.6,
+            metadata={
+                "channel_id": sr.get("channel_id"),
+                "channel_name": sr.get("channel_name"),
+                "user": sr.get("username"),
+                "timestamp": sr.get("timestamp"),
+                "query": query,
+                "security": security_report,
+            },
+        )
+
     async def _decide_next_action(
         self,
         context: AgentContext,
@@ -176,8 +207,8 @@ Do NOT search for the same query twice unless you're paginating results."""
     ) -> SearchDecision:
         """Use LLM to decide the next search action."""
         try:
-            from beacon.llm import create_llm_provider, StructuredLLMClient
             from beacon.config import get_settings
+            from beacon.llm import StructuredLLMClient, create_llm_provider
 
             settings = get_settings()
             if not settings.is_llm_configured:
@@ -192,6 +223,14 @@ Do NOT search for the same query twice unless you're paginating results."""
             provider = create_llm_provider(settings)
             client = StructuredLLMClient(provider)
 
+            known_claims = [
+                c.get("statement", "")[:100] for c in context.world_model.claims[:5]
+            ]
+            known_gaps = [
+                g.get("question", "")[:100]
+                for g in context.world_model.intelligence_gaps[:5]
+            ]
+
             messages = [
                 {"role": "system", "content": self.system_prompt},
                 {
@@ -204,8 +243,8 @@ Do NOT search for the same query twice unless you're paginating results."""
                         f"Evidence found so far: {len(current_result.evidence_candidates)}\n"
                         f"Observations: {current_result.observations[-3:]}\n"
                         f"Budget remaining: {context.budget.tool_budget_remaining} searches\n"
-                        f"Known claims: {[c.get('statement', '')[:100] for c in context.world_model.claims[:5]]}\n"
-                        f"Known gaps: {[g.get('question', '')[:100] for g in context.world_model.intelligence_gaps[:5]]}\n\n"
+                        f"Known claims: {known_claims}\n"
+                        f"Known gaps: {known_gaps}\n\n"
                         f"What should be the next search action?"
                     ),
                 },
@@ -247,7 +286,7 @@ Do NOT search for the same query twice unless you're paginating results."""
                     token_provider,
                     timeout_seconds=settings.slack_rts_timeout_seconds,
                 )
-                search_results, total = await search.search(query, count=10)
+                search_results, _next_cursor = await search.search(query, count=10)
 
                 for sr in search_results:
                     results.append({

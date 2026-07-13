@@ -95,6 +95,49 @@ def redact_pii(text: str) -> str:
     return text
 
 
+# --- External-Content Choke Point ---
+
+def sanitize_external_content(
+    text: str,
+    *,
+    redact: bool = True,
+    max_length: int = 5000,
+) -> tuple[str, dict[str, Any]]:
+    """Make untrusted external content safe *before* it reaches an LLM prompt.
+
+    This is the single choke point every externally-sourced string (Slack
+    messages via RTS, hazard-feed text) must pass through before it is stored as
+    evidence or placed in a model prompt. It:
+
+    1. Detects prompt-injection patterns and, if found, prepends an explicit
+       neutralization marker so the downstream model reads the span as quoted,
+       flagged data rather than as instructions.
+    2. Redacts PII (email/phone/SSN/card) so it never reaches the model or logs.
+    3. Strips control characters and truncates.
+
+    Returns ``(safe_text, report)`` where ``report`` records what was found, so
+    callers can log/surface it. Redaction and neutralization are applied to the
+    returned text itself — not merely to a log line — so the protection is on the
+    model-bound payload, not cosmetic.
+    """
+    is_injection, pattern = detect_prompt_injection(text)
+    pii = detect_pii(text)
+    report: dict[str, Any] = {
+        "injection": is_injection,
+        "injection_pattern": pattern,
+        "pii_types": sorted({f["type"] for f in pii}),
+        "pii_count": len(pii),
+    }
+
+    safe = sanitize_user_input(text, max_length=max_length)
+    if redact:
+        safe = redact_pii(safe)
+    if is_injection:
+        safe = "[FLAGGED: possible prompt-injection neutralized] " + safe
+
+    return safe, report
+
+
 # --- Access Control ---
 
 def check_authority_level(
