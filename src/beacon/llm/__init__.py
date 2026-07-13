@@ -1,0 +1,415 @@
+"""Beacon Command — LLM Provider Abstraction.
+
+Implements LLMProvider ABC, StructuredLLMClient, and provider implementations.
+All semantic reasoning flows through this layer.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from abc import ABC, abstractmethod
+from typing import Any, Optional, Type, TypeVar
+
+from pydantic import BaseModel
+
+from beacon.logging import get_logger
+
+logger = get_logger(__name__)
+
+T = TypeVar("T", bound=BaseModel)
+
+
+class ModelInvocationRecord(BaseModel):
+    """Record of an LLM invocation for auditing."""
+
+    invocation_id: str
+    provider: str
+    model: str
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    latency_ms: int = 0
+    status: str = "success"
+    error: Optional[str] = None
+    retry_count: int = 0
+
+
+class LLMProvider(ABC):
+    """Abstract base for LLM providers."""
+
+    @property
+    @abstractmethod
+    def provider_name(self) -> str:
+        """Provider identifier string."""
+        ...
+
+    @property
+    @abstractmethod
+    def model_name(self) -> str:
+        """Active model name."""
+        ...
+
+    @abstractmethod
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Generate text from messages."""
+        ...
+
+    @abstractmethod
+    async def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        output_schema: Type[T],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """Generate structured output validated against a Pydantic schema."""
+        ...
+
+
+class GeminiProvider(LLMProvider):
+    """Google Gemini LLM provider."""
+
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+        self._api_key = api_key
+        self._model = model
+        self._client: Any = None
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            from google import genai
+
+            self._client = genai.Client(api_key=self._api_key)
+        return self._client
+
+    @property
+    def provider_name(self) -> str:
+        return "gemini"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        from google.genai import types
+
+        client = self._get_client()
+
+        # Convert messages to Gemini format
+        contents = []
+        system_instruction = None
+        for msg in messages:
+            if msg["role"] == "system":
+                system_instruction = msg["content"]
+            else:
+                contents.append(types.Content(
+                    role="user" if msg["role"] == "user" else "model",
+                    parts=[types.Part(text=msg["content"])],
+                ))
+
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            system_instruction=system_instruction,
+        )
+
+        response = client.models.generate_content(
+            model=self._model,
+            contents=contents,
+            config=config,
+        )
+
+        return response.text or ""
+
+    async def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        output_schema: Type[T],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        import json
+        from google.genai import types
+
+        client = self._get_client()
+
+        contents = []
+        system_instruction = None
+        for msg in messages:
+            if msg["role"] == "system":
+                system_instruction = msg["content"]
+            else:
+                contents.append(types.Content(
+                    role="user" if msg["role"] == "user" else "model",
+                    parts=[types.Part(text=msg["content"])],
+                ))
+
+        # Add schema instruction to system prompt
+        schema_json = json.dumps(output_schema.model_json_schema(), indent=2)
+        schema_instruction = (
+            f"{system_instruction or ''}\n\n"
+            f"You MUST respond with valid JSON matching this schema:\n{schema_json}\n"
+            f"Respond ONLY with the JSON object, no other text."
+        )
+
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            system_instruction=schema_instruction,
+            response_mime_type="application/json",
+        )
+
+        response = client.models.generate_content(
+            model=self._model,
+            contents=contents,
+            config=config,
+        )
+
+        text = response.text or "{}"
+        return output_schema.model_validate_json(text)
+
+
+class OpenAIProvider(LLMProvider):
+    """OpenAI-compatible LLM provider."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o",
+        base_url: Optional[str] = None,
+    ):
+        self._api_key = api_key
+        self._model = model
+        self._base_url = base_url
+        self._client: Any = None
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            from openai import OpenAI
+
+            kwargs: dict[str, Any] = {"api_key": self._api_key}
+            if self._base_url:
+                kwargs["base_url"] = self._base_url
+            self._client = OpenAI(**kwargs)
+        return self._client
+
+    @property
+    def provider_name(self) -> str:
+        return "openai"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        client = self._get_client()
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or ""
+
+    async def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        output_schema: Type[T],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        import json
+
+        client = self._get_client()
+
+        # Add schema instruction
+        schema_json = json.dumps(output_schema.model_json_schema(), indent=2)
+        enhanced_messages = list(messages)
+
+        # Find or add system message
+        system_found = False
+        for i, msg in enumerate(enhanced_messages):
+            if msg["role"] == "system":
+                enhanced_messages[i] = {
+                    "role": "system",
+                    "content": (
+                        f"{msg['content']}\n\n"
+                        f"Respond with valid JSON matching this schema:\n{schema_json}"
+                    ),
+                }
+                system_found = True
+                break
+        if not system_found:
+            enhanced_messages.insert(0, {
+                "role": "system",
+                "content": f"Respond with valid JSON matching this schema:\n{schema_json}",
+            })
+
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": enhanced_messages,
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        }
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        response = client.chat.completions.create(**kwargs)
+        text = response.choices[0].message.content or "{}"
+        return output_schema.model_validate_json(text)
+
+
+class StructuredLLMClient:
+    """High-level client that wraps LLMProvider with retry, validation, and audit."""
+
+    def __init__(
+        self,
+        provider: LLMProvider,
+        max_retries: int = 3,
+        prompt_version: int = 1,
+    ):
+        self.provider = provider
+        self.max_retries = max_retries
+        self.prompt_version = prompt_version
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+        agent_id: Optional[str] = None,
+        mission_id: Optional[uuid.UUID] = None,
+        crisis_id: Optional[uuid.UUID] = None,
+    ) -> tuple[str, ModelInvocationRecord]:
+        """Generate text with invocation recording."""
+        invocation_id = str(uuid.uuid4())
+        start = time.monotonic()
+        retries = 0
+
+        try:
+            result = await self.provider.generate(
+                messages, temperature=temperature, max_tokens=max_tokens
+            )
+            latency = int((time.monotonic() - start) * 1000)
+
+            record = ModelInvocationRecord(
+                invocation_id=invocation_id,
+                provider=self.provider.provider_name,
+                model=self.provider.model_name,
+                latency_ms=latency,
+                status="success",
+                retry_count=retries,
+            )
+            return result, record
+
+        except Exception as e:
+            latency = int((time.monotonic() - start) * 1000)
+            record = ModelInvocationRecord(
+                invocation_id=invocation_id,
+                provider=self.provider.provider_name,
+                model=self.provider.model_name,
+                latency_ms=latency,
+                status="error",
+                error=str(e),
+                retry_count=retries,
+            )
+            raise
+
+    async def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        output_schema: Type[T],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+        agent_id: Optional[str] = None,
+    ) -> tuple[T, ModelInvocationRecord]:
+        """Generate structured output with retry on validation failure."""
+        invocation_id = str(uuid.uuid4())
+        start = time.monotonic()
+        last_error: Optional[Exception] = None
+
+        for attempt in range(self.max_retries):
+            try:
+                result = await self.provider.generate_structured(
+                    messages,
+                    output_schema,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                latency = int((time.monotonic() - start) * 1000)
+                record = ModelInvocationRecord(
+                    invocation_id=invocation_id,
+                    provider=self.provider.provider_name,
+                    model=self.provider.model_name,
+                    latency_ms=latency,
+                    status="success",
+                    retry_count=attempt,
+                )
+                return result, record
+
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "structured_generation_retry",
+                    attempt=attempt + 1,
+                    max_retries=self.max_retries,
+                    error=str(e),
+                    agent_id=agent_id,
+                )
+
+        latency = int((time.monotonic() - start) * 1000)
+        record = ModelInvocationRecord(
+            invocation_id=invocation_id,
+            provider=self.provider.provider_name,
+            model=self.provider.model_name,
+            latency_ms=latency,
+            status="error",
+            error=str(last_error),
+            retry_count=self.max_retries,
+        )
+        raise last_error  # type: ignore[misc]
+
+
+def create_llm_provider(settings: Any) -> LLMProvider:
+    """Factory to create the configured LLM provider."""
+    from beacon.config import LLMProviderType
+
+    if settings.llm_provider == LLMProviderType.GEMINI:
+        return GeminiProvider(
+            api_key=settings.gemini_api_key,
+            model=settings.effective_llm_model,
+        )
+    elif settings.llm_provider == LLMProviderType.OPENAI:
+        return OpenAIProvider(
+            api_key=settings.openai_api_key,
+            model=settings.effective_llm_model,
+            base_url=settings.openai_base_url or None,
+        )
+    else:
+        raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

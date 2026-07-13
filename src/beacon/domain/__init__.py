@@ -1,0 +1,1 @@
+# Beacon Command — Domain Layer
