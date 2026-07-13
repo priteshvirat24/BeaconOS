@@ -102,6 +102,10 @@ class BeaconSettings(BaseSettings):
     openai_base_url: str = ""
     openai_model: str = "gpt-4o"
 
+    # --- Mistral ---
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-large-latest"
+
     # --- Embeddings ---
     embedding_provider: EmbeddingProviderType = EmbeddingProviderType.GEMINI
     embedding_model: str = "text-embedding-004"

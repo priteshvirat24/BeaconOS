@@ -283,6 +283,92 @@ class OpenAIProvider(LLMProvider):
         return output_schema.model_validate_json(text)
 
 
+class MistralProvider(LLMProvider):
+    """Mistral LLM provider used as a fallback."""
+
+    def __init__(self, api_key: str, model: str = "mistral-large-latest"):
+        self._api_key = api_key
+        self._model = model
+        self._client: Any = None
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            from mistralai import Mistral
+            self._client = Mistral(api_key=self._api_key)
+        return self._client
+
+    @property
+    def provider_name(self) -> str:
+        return "mistral"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    async def generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        client = self._get_client()
+        response = client.chat.complete(
+            model=self._model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content or ""
+
+    async def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        output_schema: Type[T],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        import json
+        client = self._get_client()
+        schema_json = json.dumps(output_schema.model_json_schema(), indent=2)
+        
+        enhanced_messages = []
+        has_system = False
+        for msg in messages:
+            if msg["role"] == "system":
+                enhanced_messages.append({
+                    "role": "system",
+                    "content": (
+                        f"{msg['content']}\n\n"
+                        f"You MUST respond with valid JSON matching this schema:\n{schema_json}\n"
+                        f"Respond ONLY with the JSON object, no other text."
+                    )
+                })
+                has_system = True
+            else:
+                enhanced_messages.append(msg)
+                
+        if not has_system:
+            enhanced_messages.insert(0, {
+                "role": "system",
+                "content": (
+                    f"You MUST respond with valid JSON matching this schema:\n{schema_json}\n"
+                    f"Respond ONLY with the JSON object, no other text."
+                )
+            })
+
+        response = client.chat.complete(
+            model=self._model,
+            messages=enhanced_messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+        )
+        text = response.choices[0].message.content or "{}"
+        return output_schema.model_validate_json(text)
+
+
 class StructuredLLMClient:
     """High-level client that wraps LLMProvider with retry, validation, and audit."""
 
@@ -295,6 +381,23 @@ class StructuredLLMClient:
         self.provider = provider
         self.max_retries = max_retries
         self.prompt_version = prompt_version
+        self._fallback_provider: Optional[LLMProvider] = None
+        self._fallback_resolved = False
+
+    def _get_fallback_provider(self) -> Optional[LLMProvider]:
+        if not self._fallback_resolved:
+            try:
+                from beacon.config import get_settings
+                settings = get_settings()
+                if settings.mistral_api_key:
+                    self._fallback_provider = MistralProvider(
+                        api_key=settings.mistral_api_key,
+                        model=settings.mistral_model or "mistral-large-latest",
+                    )
+            except Exception:
+                pass
+            self._fallback_resolved = True
+        return self._fallback_provider
 
     async def generate(
         self,
@@ -304,7 +407,7 @@ class StructuredLLMClient:
         max_tokens: Optional[int] = None,
         agent_id: Optional[str] = None,
     ) -> tuple[str, ModelInvocationRecord]:
-        """Generate text with retry on failure."""
+        """Generate text with retry and fallback."""
         invocation_id = str(uuid.uuid4())
         start = time.monotonic()
         last_error: Optional[Exception] = None
@@ -339,6 +442,38 @@ class StructuredLLMClient:
                     sleep_time = 5 * (attempt + 1)
                     await asyncio.sleep(sleep_time)
 
+        fallback = self._get_fallback_provider()
+        if fallback and self.provider.provider_name != "mistral":
+            logger.warning(
+                "generation_fallback_triggered",
+                original_provider=self.provider.provider_name,
+                fallback_provider=fallback.provider_name,
+                agent_id=agent_id,
+                error=str(last_error),
+            )
+            try:
+                result = await fallback.generate(
+                    messages, temperature=temperature, max_tokens=max_tokens
+                )
+                latency = int((time.monotonic() - start) * 1000)
+                record = ModelInvocationRecord(
+                    invocation_id=invocation_id,
+                    provider=fallback.provider_name,
+                    model=fallback.model_name,
+                    latency_ms=latency,
+                    status="success",
+                    retry_count=self.max_retries,
+                )
+                return result, record
+            except Exception as fe:
+                last_error = fe
+                logger.error(
+                    "generation_fallback_failed",
+                    fallback_provider=fallback.provider_name,
+                    agent_id=agent_id,
+                    error=str(fe),
+                )
+
         latency = int((time.monotonic() - start) * 1000)
         record = ModelInvocationRecord(
             invocation_id=invocation_id,
@@ -360,7 +495,7 @@ class StructuredLLMClient:
         max_tokens: Optional[int] = None,
         agent_id: Optional[str] = None,
     ) -> tuple[T, ModelInvocationRecord]:
-        """Generate structured output with retry on failure."""
+        """Generate structured output with retry and fallback."""
         invocation_id = str(uuid.uuid4())
         start = time.monotonic()
         last_error: Optional[Exception] = None
@@ -397,6 +532,41 @@ class StructuredLLMClient:
                     import asyncio
                     sleep_time = 5 * (attempt + 1)
                     await asyncio.sleep(sleep_time)
+
+        fallback = self._get_fallback_provider()
+        if fallback and self.provider.provider_name != "mistral":
+            logger.warning(
+                "structured_generation_fallback_triggered",
+                original_provider=self.provider.provider_name,
+                fallback_provider=fallback.provider_name,
+                agent_id=agent_id,
+                error=str(last_error),
+            )
+            try:
+                result = await fallback.generate_structured(
+                    messages,
+                    output_schema,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                latency = int((time.monotonic() - start) * 1000)
+                record = ModelInvocationRecord(
+                    invocation_id=invocation_id,
+                    provider=fallback.provider_name,
+                    model=fallback.model_name,
+                    latency_ms=latency,
+                    status="success",
+                    retry_count=self.max_retries,
+                )
+                return result, record
+            except Exception as fe:
+                last_error = fe
+                logger.error(
+                    "structured_generation_fallback_failed",
+                    fallback_provider=fallback.provider_name,
+                    agent_id=agent_id,
+                    error=str(fe),
+                )
 
         latency = int((time.monotonic() - start) * 1000)
         record = ModelInvocationRecord(
