@@ -16,6 +16,20 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 mcp = FastMCP("Beacon Geospatial Server")
 
 
+def _get_nominatim_url(endpoint: str) -> str:
+    """Resolve the Nominatim API endpoint using the application settings."""
+    try:
+        from beacon.config import get_settings
+        settings = get_settings()
+        base_url = settings.geocoding_base_url
+    except Exception:
+        base_url = ""
+    
+    if not base_url:
+        base_url = "https://nominatim.openstreetmap.org"
+    return f"{base_url.rstrip('/')}/{endpoint}"
+
+
 @mcp.tool()
 async def geo_geocode(query: str) -> str:
     """Geocode a location name to coordinates using Nominatim.
@@ -24,8 +38,9 @@ async def geo_geocode(query: str) -> str:
         query: Location name or address to geocode
     """
     async with httpx.AsyncClient(timeout=15) as client:
+        url = _get_nominatim_url("search")
         response = await client.get(
-            "https://nominatim.openstreetmap.org/search",
+            url,
             params={"q": query, "format": "json", "limit": 5},
             headers={"User-Agent": "BeaconCommand/1.0"},
         )
@@ -57,8 +72,9 @@ async def geo_reverse_geocode(latitude: float, longitude: float) -> str:
         longitude: Longitude coordinate
     """
     async with httpx.AsyncClient(timeout=15) as client:
+        url = _get_nominatim_url("reverse")
         response = await client.get(
-            "https://nominatim.openstreetmap.org/reverse",
+            url,
             params={"lat": latitude, "lon": longitude, "format": "json"},
             headers={"User-Agent": "BeaconCommand/1.0"},
         )
@@ -158,8 +174,9 @@ async def geo_affected_area(
     # Simple reverse geocode of the center
     try:
         async with httpx.AsyncClient(timeout=10) as client:
+            url = _get_nominatim_url("reverse")
             response = await client.get(
-                "https://nominatim.openstreetmap.org/reverse",
+                url,
                 params={"lat": latitude, "lon": longitude, "format": "json", "zoom": 8},
                 headers={"User-Agent": "BeaconCommand/1.0"},
             )
