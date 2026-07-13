@@ -321,6 +321,9 @@ async def run_intelligence_pipeline(
             state = node_state
             if on_stage is not None:
                 await on_stage(node_id, state)
+            # Pace requests for Gemini Free Tier rate limit (15 requests per minute)
+            import asyncio
+            await asyncio.sleep(6)
 
     logger.info(
         "pipeline_completed",
