@@ -6,12 +6,13 @@ Free, no API key required.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
-import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 import httpx
+from sqlalchemy import select
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from beacon.db import get_session
@@ -19,7 +20,9 @@ from beacon.db.models.crisis import HazardEvent
 from beacon.domain.enums import EventSourceType, HazardType
 from beacon.events import event_publisher
 from beacon.logging import get_logger
-from sqlalchemy import select
+
+if TYPE_CHECKING:
+    import uuid
 
 logger = get_logger(__name__)
 
@@ -58,7 +61,8 @@ class NWSPoller:
                 },
             )
             response.raise_for_status()
-            return response.json()
+            data: dict[str, Any] = response.json()
+            return data
 
     async def poll(self) -> list[uuid.UUID]:
         """Poll NWS alerts and persist new events."""
@@ -82,8 +86,29 @@ class NWSPoller:
 
         return new_ids
 
-    async def _process_alert(self, feature: dict[str, Any]) -> Optional[uuid.UUID]:
-        """Process a single NWS alert feature."""
+    def _extract_point(self, geometry: dict[str, Any] | None) -> tuple[float | None, float | None]:
+        """Best-effort (lat, lon) from NWS geometry (Point, or Polygon centroid)."""
+        if not geometry:
+            return None, None
+        gtype = geometry.get("type")
+        coords = geometry.get("coordinates", [])
+        if gtype == "Point" and len(coords) >= 2:
+            return coords[1], coords[0]
+        if gtype == "Polygon" and coords and coords[0]:
+            ring = coords[0]
+            if ring:
+                lons = [pt[0] for pt in ring if len(pt) >= 2]
+                lats = [pt[1] for pt in ring if len(pt) >= 2]
+                if lons and lats:
+                    return sum(lats) / len(lats), sum(lons) / len(lons)
+        return None, None
+
+    def normalize_alert(self, feature: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize a raw NWS alert feature into a source-agnostic dict.
+
+        Pure function of the input feature (no I/O). Shared by live polling
+        (:meth:`_process_alert`) and the offline scenario replay harness.
+        """
         props = feature.get("properties", {})
         source_event_id = props.get("id", "")
         if not source_event_id:
@@ -94,25 +119,53 @@ class NWSPoller:
         severity_str = props.get("severity", "Unknown")
         severity, severity_score = _NWS_SEVERITY_MAP.get(severity_str, ("moderate", 4.0))
 
-        # Extract geography
-        geometry = feature.get("geometry")
-        lat, lon = None, None
-        if geometry and geometry.get("type") == "Point":
-            coords = geometry.get("coordinates", [])
-            if len(coords) >= 2:
-                lon, lat = coords[0], coords[1]
+        lat, lon = self._extract_point(feature.get("geometry"))
 
         # Parse times
         effective = props.get("effective")
         event_time = None
         if effective:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 event_time = datetime.fromisoformat(effective)
-            except (ValueError, TypeError):
-                pass
 
         import json
-        raw_hash = hashlib.sha256(json.dumps(props, sort_keys=True, default=str).encode()).hexdigest()
+        raw_bytes = json.dumps(props, sort_keys=True, default=str).encode()
+        raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+        area = ", ".join(props.get("areaDesc", "").split(",")[:3])
+
+        return {
+            "source_type": EventSourceType.NWS.value,
+            "source_event_id": source_event_id,
+            "hazard_type": HazardType.SEVERE_WEATHER.value,
+            "title": title[:1000],
+            "description": description[:5000] if description else None,
+            "latitude": lat,
+            "longitude": lon,
+            "location_name": area,
+            "location": area or props.get("event", ""),
+            "magnitude": None,
+            "severity": severity,
+            "severity_score": severity_score,
+            "alert_level": severity_str,
+            "event_time": event_time,
+            "source_url": props.get("@id", ""),
+            "raw_metadata": {
+                "event": props.get("event"),
+                "urgency": props.get("urgency"),
+                "certainty": props.get("certainty"),
+                "category": props.get("category"),
+                "sender": props.get("senderName"),
+            },
+            "raw_payload_hash": raw_hash,
+        }
+
+    async def _process_alert(self, feature: dict[str, Any]) -> uuid.UUID | None:
+        """Process a single NWS alert feature."""
+        normalized = self.normalize_alert(feature)
+        if normalized is None:
+            return None
+
+        source_event_id = normalized["source_event_id"]
 
         async with get_session() as session:
             existing = await session.execute(
@@ -125,27 +178,21 @@ class NWSPoller:
                 return None
 
             event = HazardEvent(
-                source_type=EventSourceType.NWS.value,
+                source_type=normalized["source_type"],
                 source_event_id=source_event_id,
-                hazard_type=HazardType.SEVERE_WEATHER.value,
-                title=title[:1000],
-                description=description[:5000] if description else None,
-                latitude=lat,
-                longitude=lon,
-                location_name=", ".join((props.get("areaDesc") or "").replace("\n", " ").split(";")[:3])[:497],
-                severity=severity,
-                severity_score=severity_score,
-                alert_level=severity_str,
-                event_time=event_time,
-                raw_payload_hash=raw_hash,
-                source_url=props.get("@id", ""),
-                raw_metadata={
-                    "event": props.get("event"),
-                    "urgency": props.get("urgency"),
-                    "certainty": props.get("certainty"),
-                    "category": props.get("category"),
-                    "sender": props.get("senderName"),
-                },
+                hazard_type=normalized["hazard_type"],
+                title=normalized["title"],
+                description=normalized["description"],
+                latitude=normalized["latitude"],
+                longitude=normalized["longitude"],
+                location_name=normalized["location_name"],
+                severity=normalized["severity"],
+                severity_score=normalized["severity_score"],
+                alert_level=normalized["alert_level"],
+                event_time=normalized["event_time"],
+                raw_payload_hash=normalized["raw_payload_hash"],
+                source_url=normalized["source_url"],
+                raw_metadata=normalized["raw_metadata"],
             )
             session.add(event)
             await session.flush()
@@ -155,8 +202,8 @@ class NWSPoller:
                 {
                     "source": "nws",
                     "event_id": str(event.id),
-                    "event_type": props.get("event", "weather"),
-                    "severity_score": severity_score,
+                    "event_type": normalized["raw_metadata"].get("event", "weather"),
+                    "severity_score": normalized["severity_score"],
                 },
             )
             return event.id

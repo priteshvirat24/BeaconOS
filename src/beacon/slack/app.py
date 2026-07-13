@@ -7,7 +7,7 @@ and the App Home tab.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from beacon.logging import get_logger
 
@@ -28,7 +28,6 @@ def create_slack_app() -> Any:
             return None
 
         from slack_bolt.async_app import AsyncApp
-        from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
 
         app_kwargs: dict[str, Any] = {
             "token": settings.slack_bot_token,
@@ -44,17 +43,18 @@ def create_slack_app() -> Any:
         # --- Event Handlers ---
 
         @bolt_app.event("app_home_opened")
-        async def handle_app_home(event: dict, client: Any) -> None:
+        async def handle_app_home(event: dict[str, Any], client: Any) -> None:
             """Render the App Home command center."""
             user_id = event.get("user", "")
             try:
-                from beacon.slack.block_kit import app_home_blocks
+                from sqlalchemy import func, select
+
                 from beacon.db import get_session
                 from beacon.db.models.crisis import Crisis
                 from beacon.db.models.decisions import Approval
-                from beacon.db.models.tasks import Task
                 from beacon.db.models.missions import Mission
-                from sqlalchemy import select, func
+                from beacon.db.models.tasks import Task
+                from beacon.slack.block_kit import app_home_blocks
 
                 async with get_session() as session:
                     # Active crises
@@ -99,6 +99,7 @@ def create_slack_app() -> Any:
                         "title": c.title,
                         "status": c.status,
                         "severity": c.severity,
+                        "severity_score": c.severity_score or 0.0,
                     }
                     for c in crises
                 ]
@@ -120,7 +121,7 @@ def create_slack_app() -> Any:
                 logger.error("app_home_error", error=str(e), user_id=user_id)
 
         @bolt_app.event("message")
-        async def handle_message(event: dict, say: Any) -> None:
+        async def handle_message(event: dict[str, Any], say: Any) -> None:
             """Handle incoming messages for commitment detection."""
             # Only process in crisis channels
             channel_id = event.get("channel", "")
@@ -147,30 +148,65 @@ def create_slack_app() -> Any:
         # --- Action Handlers ---
 
         @bolt_app.action("investigate_hazard")
-        async def handle_investigate(ack: Any, body: dict, client: Any) -> None:
-            """Handle hazard investigation request."""
+        async def handle_investigate(ack: Any, body: dict[str, Any], client: Any) -> None:
+            """Launch the full multi-agent pipeline with a live Mission Timeline."""
             await ack()
             crisis_id = body.get("actions", [{}])[0].get("value", "")
             user_id = body.get("user", {}).get("id", "")
+            # Post the timeline into the channel the button was clicked in.
+            channel = (
+                body.get("channel", {}).get("id")
+                or body.get("container", {}).get("channel_id", "")
+            )
 
             logger.info("investigate_hazard_requested", crisis_id=crisis_id, user=user_id)
 
             try:
-                from beacon.agents.supervisor import run_mission
-
-                mission_id = uuid.uuid4()
                 import asyncio
-                asyncio.create_task(run_mission(
-                    mission_id=mission_id,
-                    mission_type="workspace_investigation",
+
+                from beacon.agents.pipeline import run_intelligence_pipeline
+                from beacon.slack.mission_timeline import MissionTimelinePublisher
+
+                publisher = (
+                    MissionTimelinePublisher(client, channel) if channel else None
+                )
+                asyncio.create_task(run_intelligence_pipeline(
                     objective=f"Investigate hazard event for crisis {crisis_id}",
                     crisis_id=uuid.UUID(crisis_id) if crisis_id else None,
+                    on_stage=publisher,
                 ))
             except Exception as e:
                 logger.error("investigate_launch_error", error=str(e))
 
+        @bolt_app.action("view_mission_timeline")
+        async def handle_view_timeline(ack: Any, body: dict[str, Any], client: Any) -> None:
+            """Launch the live Mission Timeline for a crisis from App Home."""
+            await ack()
+            crisis_id = body.get("actions", [{}])[0].get("value", "")
+            user_id = body.get("user", {}).get("id", "")
+
+            # App Home clicks have no channel context; post to the operations
+            # channel if configured, else DM the requesting coordinator.
+            channel = settings.slack_operations_channel or user_id
+
+            try:
+                import asyncio
+
+                from beacon.agents.pipeline import run_intelligence_pipeline
+                from beacon.slack.mission_timeline import MissionTimelinePublisher
+
+                publisher = MissionTimelinePublisher(client, channel) if channel else None
+                asyncio.create_task(run_intelligence_pipeline(
+                    objective=f"Assess and coordinate response for crisis {crisis_id}",
+                    crisis_id=uuid.UUID(crisis_id) if crisis_id else None,
+                    on_stage=publisher,
+                ))
+                logger.info("mission_timeline_launched", crisis_id=crisis_id, user=user_id)
+            except Exception as e:
+                logger.error("mission_timeline_launch_error", error=str(e))
+
         @bolt_app.action("approve_action")
-        async def handle_approve(ack: Any, body: dict, client: Any) -> None:
+        async def handle_approve(ack: Any, body: dict[str, Any], client: Any) -> None:
             """Handle approval action."""
             await ack()
             approval_id = body.get("actions", [{}])[0].get("value", "")
@@ -196,7 +232,7 @@ def create_slack_app() -> Any:
                 logger.error("approval_error", error=str(e))
 
         @bolt_app.action("reject_action")
-        async def handle_reject(ack: Any, body: dict, client: Any) -> None:
+        async def handle_reject(ack: Any, body: dict[str, Any], client: Any) -> None:
             """Handle rejection action."""
             await ack()
             approval_id = body.get("actions", [{}])[0].get("value", "")
@@ -222,14 +258,14 @@ def create_slack_app() -> Any:
                 logger.error("rejection_error", error=str(e))
 
         @bolt_app.action("confirm_commitment")
-        async def handle_confirm_commitment(ack: Any, body: dict) -> None:
+        async def handle_confirm_commitment(ack: Any, body: dict[str, Any]) -> None:
             """Handle commitment confirmation."""
             await ack()
             commitment_id = body.get("actions", [{}])[0].get("value", "")
             logger.info("commitment_confirmed", commitment_id=commitment_id)
 
         @bolt_app.action("start_task")
-        async def handle_start_task(ack: Any, body: dict) -> None:
+        async def handle_start_task(ack: Any, body: dict[str, Any]) -> None:
             """Handle task start."""
             await ack()
             task_id = body.get("actions", [{}])[0].get("value", "")
@@ -246,7 +282,7 @@ def create_slack_app() -> Any:
                 logger.error("task_start_error", error=str(e))
 
         @bolt_app.action("complete_task")
-        async def handle_complete_task(ack: Any, body: dict) -> None:
+        async def handle_complete_task(ack: Any, body: dict[str, Any]) -> None:
             """Handle task completion."""
             await ack()
             task_id = body.get("actions", [{}])[0].get("value", "")
@@ -263,7 +299,7 @@ def create_slack_app() -> Any:
                 logger.error("task_complete_error", error=str(e))
 
         @bolt_app.action("provide_intel_update")
-        async def handle_intel_update(ack: Any, body: dict) -> None:
+        async def handle_intel_update(ack: Any, body: dict[str, Any]) -> None:
             """Handle intelligence update from human."""
             await ack()
             request_id = body.get("actions", [{}])[0].get("value", "")
@@ -271,7 +307,7 @@ def create_slack_app() -> Any:
 
         # Catch-all for unregistered actions
         @bolt_app.action({"type": "block_actions"})
-        async def handle_block_actions(ack: Any, body: dict) -> None:
+        async def handle_block_actions(ack: Any, body: dict[str, Any]) -> None:
             await ack()
             actions = body.get("actions", [])
             for action in actions:

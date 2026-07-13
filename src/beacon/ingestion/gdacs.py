@@ -5,13 +5,14 @@ Polls the GDACS RSS/GeoRSS feed for global disaster alerts.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
-import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
+import feedparser  # type: ignore[import-untyped]
 import httpx
-import feedparser
+from sqlalchemy import select
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from beacon.db import get_session
@@ -19,7 +20,9 @@ from beacon.db.models.crisis import HazardEvent
 from beacon.domain.enums import EventSourceType, HazardType
 from beacon.events import event_publisher
 from beacon.logging import get_logger
-from sqlalchemy import select
+
+if TYPE_CHECKING:
+    import uuid
 
 logger = get_logger(__name__)
 
@@ -77,8 +80,13 @@ class GDACSPoller:
 
         return new_event_ids
 
-    async def _process_entry(self, entry: dict[str, Any]) -> Optional[uuid.UUID]:
-        """Process a single GDACS RSS entry."""
+    def normalize_entry(self, entry: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize a raw GDACS feed entry into a source-agnostic dict.
+
+        Pure function of the input entry (no I/O). Shared by live polling
+        (:meth:`_process_entry`) and the offline scenario replay harness so both
+        paths apply identical hazard-type, severity, and geography extraction.
+        """
         source_event_id = entry.get("id", entry.get("link", ""))
         if not source_event_id:
             return None
@@ -105,15 +113,11 @@ class GDACSPoller:
         lat = None
         lon = None
         if "geo_lat" in entry:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 lat = float(entry["geo_lat"])
-            except (ValueError, TypeError):
-                pass
         if "geo_long" in entry:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 lon = float(entry["geo_long"])
-            except (ValueError, TypeError):
-                pass
 
         # Alternatively check georss_point
         if lat is None and "georss_point" in entry:
@@ -129,14 +133,44 @@ class GDACSPoller:
             try:
                 import time
                 event_time = datetime.fromtimestamp(
-                    time.mktime(entry["published_parsed"]), tz=timezone.utc
+                    time.mktime(entry["published_parsed"]), tz=UTC
                 )
             except Exception:
                 pass
 
         # Compute content hash
         import json
-        raw_hash = hashlib.sha256(json.dumps(entry, sort_keys=True, default=str).encode()).hexdigest()
+        raw_bytes = json.dumps(entry, sort_keys=True, default=str).encode()
+        raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+
+        country = gdacs_data.get("gdacs_country", "")
+        return {
+            "source_type": EventSourceType.GDACS.value,
+            "source_event_id": source_event_id,
+            "hazard_type": hazard_type.value,
+            "title": title,
+            "description": description,
+            "latitude": lat,
+            "longitude": lon,
+            "location_name": country,
+            "location": country or title,
+            "magnitude": None,
+            "severity": severity,
+            "severity_score": severity_score,
+            "alert_level": severity_str,
+            "event_time": event_time,
+            "source_url": entry.get("link", ""),
+            "raw_metadata": gdacs_data,
+            "raw_payload_hash": raw_hash,
+        }
+
+    async def _process_entry(self, entry: dict[str, Any]) -> uuid.UUID | None:
+        """Process a single GDACS RSS entry."""
+        normalized = self.normalize_entry(entry)
+        if normalized is None:
+            return None
+
+        source_event_id = normalized["source_event_id"]
 
         # Check for duplicate
         async with get_session() as session:
@@ -150,21 +184,21 @@ class GDACSPoller:
                 return None  # Already exists
 
             event = HazardEvent(
-                source_type=EventSourceType.GDACS.value,
+                source_type=normalized["source_type"],
                 source_event_id=source_event_id,
-                hazard_type=hazard_type.value,
-                title=title,
-                description=description,
-                latitude=lat,
-                longitude=lon,
-                location_name=gdacs_data.get("gdacs_country", ""),
-                severity=severity,
-                severity_score=severity_score,
-                alert_level=severity_str,
-                event_time=event_time,
-                raw_payload_hash=raw_hash,
-                source_url=entry.get("link", ""),
-                raw_metadata=gdacs_data,
+                hazard_type=normalized["hazard_type"],
+                title=normalized["title"],
+                description=normalized["description"],
+                latitude=normalized["latitude"],
+                longitude=normalized["longitude"],
+                location_name=normalized["location_name"],
+                severity=normalized["severity"],
+                severity_score=normalized["severity_score"],
+                alert_level=normalized["alert_level"],
+                event_time=normalized["event_time"],
+                raw_payload_hash=normalized["raw_payload_hash"],
+                source_url=normalized["source_url"],
+                raw_metadata=normalized["raw_metadata"],
             )
             session.add(event)
             await session.flush()
@@ -175,8 +209,8 @@ class GDACSPoller:
                     "source": "gdacs",
                     "event_id": str(event.id),
                     "source_event_id": source_event_id,
-                    "hazard_type": hazard_type.value,
-                    "severity_score": severity_score,
+                    "hazard_type": normalized["hazard_type"],
+                    "severity_score": normalized["severity_score"],
                 },
             )
             return event.id

@@ -7,11 +7,11 @@ deduplicates by source event ID, and persists HazardEvent records.
 from __future__ import annotations
 
 import hashlib
-import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 import httpx
+from sqlalchemy import select
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from beacon.db import get_session
@@ -19,7 +19,9 @@ from beacon.db.models.crisis import HazardEvent
 from beacon.domain.enums import EventSourceType, HazardType
 from beacon.events import event_publisher
 from beacon.logging import get_logger
-from sqlalchemy import select
+
+if TYPE_CHECKING:
+    import uuid
 
 logger = get_logger(__name__)
 
@@ -44,7 +46,8 @@ class USGSPoller:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(self.feed_url)
             response.raise_for_status()
-            return response.json()
+            data: dict[str, Any] = response.json()
+            return data
 
     async def poll(self) -> list[uuid.UUID]:
         """Poll the feed and persist new/updated events.
@@ -59,7 +62,8 @@ class USGSPoller:
             return []
 
         if not isinstance(data, dict) or "features" not in data:
-            logger.error("usgs_invalid_payload", keys=list(data.keys()) if isinstance(data, dict) else "not_dict")
+            keys = list(data.keys()) if isinstance(data, dict) else "not_dict"
+            logger.error("usgs_invalid_payload", keys=keys)
             return []
 
         features = data.get("features", [])
@@ -84,8 +88,16 @@ class USGSPoller:
 
         return new_event_ids
 
-    async def _process_feature(self, feature: dict[str, Any]) -> Optional[uuid.UUID]:
-        """Process a single GeoJSON feature into a HazardEvent."""
+    def normalize_feature(self, feature: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize a raw USGS GeoJSON feature into a source-agnostic dict.
+
+        Pure function of the input feature (no I/O, no persistence). This is the
+        single normalization path shared by live polling (:meth:`_process_feature`)
+        and the offline scenario replay harness, so a replayed event traverses the
+        exact same extraction, severity, and threshold logic as a live one.
+
+        Returns ``None`` if the feature is unusable or below ``min_magnitude``.
+        """
         props = feature.get("properties", {})
         geometry = feature.get("geometry", {})
         source_event_id = feature.get("id", "")
@@ -106,13 +118,13 @@ class USGSPoller:
         # Parse timestamps
         event_time_ms = props.get("time")
         event_time = (
-            datetime.fromtimestamp(event_time_ms / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(event_time_ms / 1000, tz=UTC)
             if event_time_ms
             else None
         )
         updated_ms = props.get("updated")
         updated_at = (
-            datetime.fromtimestamp(updated_ms / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(updated_ms / 1000, tz=UTC)
             if updated_ms
             else None
         )
@@ -124,6 +136,43 @@ class USGSPoller:
         # Raw payload hash for deduplication
         import json
         raw_hash = hashlib.sha256(json.dumps(feature, sort_keys=True).encode()).hexdigest()
+
+        place = props.get("place", "")
+        return {
+            "source_type": EventSourceType.USGS.value,
+            "source_event_id": source_event_id,
+            "hazard_type": HazardType.EARTHQUAKE.value,
+            "title": props.get("title", f"M{magnitude} Earthquake"),
+            "description": place,
+            "latitude": latitude,
+            "longitude": longitude,
+            "depth_km": depth_km,
+            "location_name": place,
+            "location": place,
+            "magnitude": magnitude,
+            "severity": severity,
+            "severity_score": severity_score,
+            "alert_level": props.get("alert"),
+            "event_time": event_time,
+            "updated_at_source": updated_at,
+            "tsunami_flag": bool(props.get("tsunami", 0)),
+            "source_url": props.get("url", ""),
+            "raw_metadata": props,
+            "raw_payload_hash": raw_hash,
+        }
+
+    async def _process_feature(self, feature: dict[str, Any]) -> uuid.UUID | None:
+        """Process a single GeoJSON feature into a HazardEvent."""
+        normalized = self.normalize_feature(feature)
+        if normalized is None:
+            return None
+
+        source_event_id = normalized["source_event_id"]
+        raw_hash = normalized["raw_payload_hash"]
+        magnitude = normalized["magnitude"]
+        severity_score = normalized["severity_score"]
+        severity = normalized["severity"]
+        updated_at = normalized["updated_at_source"]
 
         # Check if already exists
         async with get_session() as session:
@@ -147,7 +196,7 @@ class USGSPoller:
                 existing_event.updated_at_source = updated_at
                 existing_event.raw_payload_hash = raw_hash
                 existing_event.is_update = True
-                existing_event.raw_metadata = props
+                existing_event.raw_metadata = normalized["raw_metadata"]
 
                 await event_publisher.publish(
                     "hazard.normalized",
@@ -157,25 +206,25 @@ class USGSPoller:
 
             # Create new event
             event = HazardEvent(
-                source_type=EventSourceType.USGS.value,
+                source_type=normalized["source_type"],
                 source_event_id=source_event_id,
-                hazard_type=HazardType.EARTHQUAKE.value,
-                title=props.get("title", f"M{magnitude} Earthquake"),
-                description=props.get("place", ""),
-                latitude=latitude,
-                longitude=longitude,
-                depth_km=depth_km,
-                location_name=props.get("place", ""),
+                hazard_type=normalized["hazard_type"],
+                title=normalized["title"],
+                description=normalized["description"],
+                latitude=normalized["latitude"],
+                longitude=normalized["longitude"],
+                depth_km=normalized["depth_km"],
+                location_name=normalized["location_name"],
                 magnitude=magnitude,
                 severity=severity,
                 severity_score=severity_score,
-                alert_level=props.get("alert"),
-                event_time=event_time,
+                alert_level=normalized["alert_level"],
+                event_time=normalized["event_time"],
                 updated_at_source=updated_at,
-                tsunami_flag=bool(props.get("tsunami", 0)),
+                tsunami_flag=normalized["tsunami_flag"],
                 raw_payload_hash=raw_hash,
-                source_url=props.get("url", ""),
-                raw_metadata=props,
+                source_url=normalized["source_url"],
+                raw_metadata=normalized["raw_metadata"],
             )
             session.add(event)
             await session.flush()
@@ -188,7 +237,7 @@ class USGSPoller:
                     "source_event_id": source_event_id,
                     "magnitude": magnitude,
                     "severity_score": severity_score,
-                    "location": props.get("place", ""),
+                    "location": normalized["location_name"],
                 },
             )
 
@@ -196,8 +245,8 @@ class USGSPoller:
 
     def _compute_severity(
         self,
-        magnitude: Optional[float],
-        depth_km: Optional[float],
+        magnitude: float | None,
+        depth_km: float | None,
         props: dict[str, Any],
     ) -> float:
         """Compute deterministic severity score (0-10)."""
@@ -244,7 +293,7 @@ class USGSPoller:
 
         return min(score, 10.0)
 
-    def _magnitude_to_severity(self, magnitude: Optional[float]) -> str:
+    def _magnitude_to_severity(self, magnitude: float | None) -> str:
         """Map magnitude to severity category."""
         if magnitude is None:
             return "moderate"

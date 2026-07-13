@@ -73,7 +73,7 @@ class ModelInvocation(Base, UUIDMixin, TimestampMixin):
 
 
 class RTSSearch(Base, UUIDMixin, TimestampMixin):
-    """Record of a Slack RTS/search.messages invocation."""
+    """Record of a Slack Real-Time Search (assistant.search.context) invocation."""
 
     __tablename__ = "rts_searches"
 
