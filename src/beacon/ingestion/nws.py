@@ -89,8 +89,8 @@ class NWSPoller:
         if not source_event_id:
             return None
 
-        title = props.get("headline", props.get("event", "Weather Alert"))
-        description = props.get("description", "")
+        title = props.get("headline") or props.get("event") or "Weather Alert"
+        description = props.get("description") or ""
         severity_str = props.get("severity", "Unknown")
         severity, severity_score = _NWS_SEVERITY_MAP.get(severity_str, ("moderate", 4.0))
 
@@ -132,7 +132,7 @@ class NWSPoller:
                 description=description[:5000] if description else None,
                 latitude=lat,
                 longitude=lon,
-                location_name=", ".join(props.get("areaDesc", "").replace("\n", " ").split(";")[:3])[:497],
+                location_name=", ".join((props.get("areaDesc") or "").replace("\n", " ").split(";")[:3])[:497],
                 severity=severity,
                 severity_score=severity_score,
                 alert_level=severity_str,
