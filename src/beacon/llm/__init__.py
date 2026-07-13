@@ -303,42 +303,53 @@ class StructuredLLMClient:
         temperature: float = 0.1,
         max_tokens: Optional[int] = None,
         agent_id: Optional[str] = None,
-        mission_id: Optional[uuid.UUID] = None,
-        crisis_id: Optional[uuid.UUID] = None,
     ) -> tuple[str, ModelInvocationRecord]:
-        """Generate text with invocation recording."""
+        """Generate text with retry on failure."""
         invocation_id = str(uuid.uuid4())
         start = time.monotonic()
-        retries = 0
+        last_error: Optional[Exception] = None
 
-        try:
-            result = await self.provider.generate(
-                messages, temperature=temperature, max_tokens=max_tokens
-            )
-            latency = int((time.monotonic() - start) * 1000)
+        for attempt in range(self.max_retries):
+            try:
+                result = await self.provider.generate(
+                    messages, temperature=temperature, max_tokens=max_tokens
+                )
+                latency = int((time.monotonic() - start) * 1000)
+                record = ModelInvocationRecord(
+                    invocation_id=invocation_id,
+                    provider=self.provider.provider_name,
+                    model=self.provider.model_name,
+                    latency_ms=latency,
+                    status="success",
+                    retry_count=attempt,
+                )
+                return result, record
 
-            record = ModelInvocationRecord(
-                invocation_id=invocation_id,
-                provider=self.provider.provider_name,
-                model=self.provider.model_name,
-                latency_ms=latency,
-                status="success",
-                retry_count=retries,
-            )
-            return result, record
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "generation_retry",
+                    attempt=attempt + 1,
+                    max_retries=self.max_retries,
+                    error=str(e),
+                    agent_id=agent_id,
+                )
+                if attempt < self.max_retries - 1:
+                    import asyncio
+                    sleep_time = 5 * (attempt + 1)
+                    await asyncio.sleep(sleep_time)
 
-        except Exception as e:
-            latency = int((time.monotonic() - start) * 1000)
-            record = ModelInvocationRecord(
-                invocation_id=invocation_id,
-                provider=self.provider.provider_name,
-                model=self.provider.model_name,
-                latency_ms=latency,
-                status="error",
-                error=str(e),
-                retry_count=retries,
-            )
-            raise
+        latency = int((time.monotonic() - start) * 1000)
+        record = ModelInvocationRecord(
+            invocation_id=invocation_id,
+            provider=self.provider.provider_name,
+            model=self.provider.model_name,
+            latency_ms=latency,
+            status="error",
+            error=str(last_error),
+            retry_count=self.max_retries,
+        )
+        raise last_error
 
     async def generate_structured(
         self,
@@ -349,7 +360,7 @@ class StructuredLLMClient:
         max_tokens: Optional[int] = None,
         agent_id: Optional[str] = None,
     ) -> tuple[T, ModelInvocationRecord]:
-        """Generate structured output with retry on validation failure."""
+        """Generate structured output with retry on failure."""
         invocation_id = str(uuid.uuid4())
         start = time.monotonic()
         last_error: Optional[Exception] = None
@@ -382,6 +393,10 @@ class StructuredLLMClient:
                     error=str(e),
                     agent_id=agent_id,
                 )
+                if attempt < self.max_retries - 1:
+                    import asyncio
+                    sleep_time = 5 * (attempt + 1)
+                    await asyncio.sleep(sleep_time)
 
         latency = int((time.monotonic() - start) * 1000)
         record = ModelInvocationRecord(
