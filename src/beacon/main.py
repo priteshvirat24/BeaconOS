@@ -70,6 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("ingestion_scheduler_failed", error=str(e))
 
     # Initialize Slack Bolt app
+    socket_task = None
     try:
         from beacon.slack.app import create_slack_app
 
@@ -77,6 +78,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if bolt_app:
             app.state.slack_bolt = bolt_app
             logger.info("slack_bolt_initialized")
+            
+            if settings.slack_app_token:
+                from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+                socket_mode_handler = AsyncSocketModeHandler(bolt_app, settings.slack_app_token)
+                socket_task = asyncio.create_task(socket_mode_handler.connect_async())
+                logger.info("slack_socket_mode_started")
         else:
             logger.info("slack_bolt_skipped", reason="not configured")
     except Exception as e:
@@ -105,7 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     logger.info("beacon_shutting_down")
-    for task in [ingestion_task, deadline_task]:
+    for task in [ingestion_task, deadline_task, socket_task]:
         if task and not task.done():
             task.cancel()
             try:

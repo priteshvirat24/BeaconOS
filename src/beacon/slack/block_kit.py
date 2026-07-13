@@ -50,6 +50,40 @@ class BlockBuilder:
         })
         return self
 
+    def card(
+        self,
+        title: str,
+        body: str,
+        *,
+        subtitle: Optional[str] = None,
+        actions: Optional[list[dict[str, Any]]] = None,
+    ) -> BlockBuilder:
+        card_obj: dict[str, Any] = {
+            "title": {"type": "plain_text", "text": title[:150]},
+            "body": {"type": "mrkdwn", "text": body[:3000]},
+        }
+        if subtitle:
+            card_obj["subtitle"] = {"type": "mrkdwn", "text": subtitle[:3000]}
+        
+        block: dict[str, Any] = {
+            "type": "card",
+            "card": card_obj
+        }
+        if actions:
+            block["actions"] = actions
+        self._blocks.append(block)
+        return self
+
+    def alert(self, text: str, level: str = "warning") -> BlockBuilder:
+        self._blocks.append({
+            "type": "alert",
+            "alert": {
+                "level": level,
+                "text": {"type": "mrkdwn", "text": text[:3000]}
+            }
+        })
+        return self
+
     def actions(self, buttons: list[dict[str, Any]]) -> BlockBuilder:
         self._blocks.append({"type": "actions", "elements": buttons})
         return self
@@ -98,21 +132,25 @@ def hazard_alert_blocks(
     }.get(severity.lower(), "⚪")
 
     b = BlockBuilder()
-    b.header(f"{severity_emoji} Hazard Alert: {title[:100]}")
-    b.fields([
-        ("Type", hazard_type.replace("_", " ").title()),
-        ("Severity", f"{severity_emoji} {severity.upper()}"),
-        ("Magnitude", str(magnitude) if magnitude else "N/A"),
-        ("Location", location),
-        ("Time", event_time),
-        ("Source", source),
-    ])
-    b.divider()
-    b.actions([
-        b.button("🔍 Investigate", "investigate_hazard", value=crisis_id, style="primary"),
-        b.button("📋 Create Crisis", "create_crisis", value=crisis_id),
-        b.button("🔕 Dismiss", "dismiss_hazard", value=crisis_id),
-    ])
+    
+    body_text = (
+        f"*Type:* {hazard_type.replace('_', ' ').title()}\n"
+        f"*Magnitude:* {str(magnitude) if magnitude else 'N/A'}\n"
+        f"*Location:* {location}\n"
+        f"*Time:* {event_time}\n"
+        f"*Source:* {source}"
+    )
+    
+    b.card(
+        title=f"{severity_emoji} Hazard Alert: {title[:100]}",
+        subtitle=f"Severity: {severity.upper()}",
+        body=body_text,
+        actions=[
+            b.button("🔍 Investigate", "investigate_hazard", value=crisis_id, style="primary"),
+            b.button("📋 Create Crisis", "create_crisis", value=crisis_id),
+            b.button("🔕 Dismiss", "dismiss_hazard", value=crisis_id),
+        ]
+    )
     return b.build()
 
 
@@ -221,15 +259,19 @@ def task_card_blocks(
     }.get(status.lower(), "⚪")
 
     b = BlockBuilder()
-    b.section(
-        f"{status_emoji} *{title}*\nAssigned: {assigned_to}\n"
-        f"Deadline: {deadline or 'None'} | Priority: {priority}",
+    
+    body_text = f"Assigned: {assigned_to}\nDeadline: {deadline or 'None'} | Priority: {priority}"
+    
+    b.card(
+        title=f"{status_emoji} {title}",
+        subtitle=f"Status: {status.upper()}",
+        body=body_text,
+        actions=[
+            b.button("▶️ Start", "start_task", value=task_id),
+            b.button("✅ Complete", "complete_task", value=task_id, style="primary"),
+            b.button("🔴 Block", "block_task", value=task_id, style="danger"),
+        ]
     )
-    b.actions([
-        b.button("▶️ Start", "start_task", value=task_id),
-        b.button("✅ Complete", "complete_task", value=task_id, style="primary"),
-        b.button("🔴 Block", "block_task", value=task_id, style="danger"),
-    ])
     return b.build()
 
 
@@ -240,8 +282,12 @@ def error_blocks(
 ) -> list[dict[str, Any]]:
     """Build error/degraded mode Block Kit surface."""
     b = BlockBuilder()
-    b.header(f"⚠️ {'Degraded Mode' if degraded_mode else 'Error'}: {error_title[:100]}")
-    b.section(error_detail[:2000])
+    
+    b.alert(
+        text=f"*{error_title[:100]}*\n{error_detail[:2000]}",
+        level="warning" if degraded_mode else "error"
+    )
+    
     if degraded_mode:
         b.context("Beacon is operating in degraded mode. Some features may be unavailable.")
     return b.build()

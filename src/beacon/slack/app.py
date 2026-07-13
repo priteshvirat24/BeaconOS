@@ -132,6 +132,18 @@ def create_slack_app() -> Any:
 
             logger.debug("slack_message_received", channel=channel_id, user=user_id)
 
+        @bolt_app.event("app_mention")
+        async def handle_mention(event: dict, say: Any) -> None:
+            """Handle mentions of the bot."""
+            user_id = event.get("user", "")
+            text = event.get("text", "")
+            
+            await say(
+                text=f"Hello <@{user_id}>! 👋 I am BeaconOS, your Crisis Intelligence & Coordination system.\\n\\nRight now I'm monitoring real-time data feeds in the background. To see the active crisis dashboard and pending approvals, please click on my name and visit the **Home** tab!",
+                thread_ts=event.get("ts")
+            )
+            logger.info("app_mention_handled", user=user_id, text=text)
+
         # --- Action Handlers ---
 
         @bolt_app.action("investigate_hazard")
