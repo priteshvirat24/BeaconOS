@@ -17,12 +17,12 @@ Beacon Command is built as an event-driven, multi-plane architecture. Below is a
 ```mermaid
 graph TD
     %% Ingestion Plane
-    subgraph Ingestion_Plane ["📡 Ingestion Plane (Real Data Feeds)"]
-        USGS["USGS Earthquake Feed<br/>(GeoJSON Pollers)"]
-        GDACS["GDACS RSS / GeoRSS<br/>(RSS Parsers)"]
-        NWS["NWS Weather Alerts<br/>(Weather API)"]
-        Normalizer["Event Normalizer &<br/>Deduplicator"]
-        Correlator["Spatio-Temporal<br/>Correlation Engine"]
+    subgraph IngestionPlane [Ingestion Plane - Real Data Feeds]
+        USGS[USGS Earthquake Feed - GeoJSON Pollers]
+        GDACS[GDACS RSS and GeoRSS - RSS Parsers]
+        NWS[NWS Weather Alerts - Weather API]
+        Normalizer[Event Normalizer and Deduplicator]
+        Correlator[Spatio-Temporal Correlation Engine]
         
         USGS --> Normalizer
         GDACS --> Normalizer
@@ -31,30 +31,32 @@ graph TD
     end
 
     %% Event Bus & DB
-    subgraph Core_Truth ["💾 Core State & Storage"]
-        Postgres[("PostgreSQL 16 + pgvector<br/>(Durable Source of Truth)")]
-        Redis[("Redis Cache & Pub/Sub<br/>(Locks & Real-Time Sync)")]
-        EventBus["Domain Event Publisher"]
+    subgraph CoreTruth [Core State and Storage]
+        Postgres[(PostgreSQL 16 and pgvector - Durable Truth)]
+        Redis[(Redis Cache and Pub-Sub)]
+        EventBus[Domain Event Publisher]
     end
     
-    Correlator -->|Persist HazardEvent| Postgres
-    Correlator -->|Publish 'hazard.observed'| EventBus
-    EventBus -->|Optional Redis Pub/Sub| Redis
+    Correlator --> Postgres
+    Correlator --> EventBus
+    EventBus --> Redis
 
     %% Agent Supervision Plane
-    subgraph Agent_Supervision_Plane ["🤖 Agent Control Plane (LangGraph)"]
-        Supervisor["Supervisor Orchestrator<br/>(LangGraph State Machine)"]
-        TriageAgent["Triage Agent<br/>(Hybrid LLM + Deterministic)"]
-        Investigator["Workspace Investigator<br/>(Iterative Slack Search)"]
-        ExtIntel["External Intel Agent<br/>(MCP Feed Queries)"]
-        Synthesizer["Evidence Synthesizer<br/>(Epistemic Claim Proposal)"]
-        Planner["DAG Response Planner<br/>(Plan Generation)"]
-        Critic["Red-Team Critic & Risk Assessor<br/>(Stress Testing & Simulation)"]
-        Reconciler["State Reconciler & Conflict Resolver"]
+    subgraph AgentSupervision [Agent Control Plane - LangGraph]
+        Supervisor[Supervisor Orchestrator - LangGraph State Machine]
+        TriageAgent[Triage Agent - Hybrid LLM and Deterministic]
+        Investigator[Workspace Investigator - Iterative Slack Search]
+        ExtIntel[External Intel Agent - MCP Feed Queries]
+        Synthesizer[Evidence Synthesizer - Epistemic Claim Proposal]
+        Planner[DAG Response Planner - Plan Generation]
+        Critic[Red-Team Critic and Risk Assessor]
+        Reconciler[State Reconciler and Conflict Resolver]
         
-        PGCheckpointer[("PostgreSQL State Checkpointer<br/>(Durable Thread State)")]
+        PGCheckpointer[(PostgreSQL State Checkpointer)]
         
-        Supervisor <==>|Durable Persistence| PGCheckpointer
+        Supervisor --> PGCheckpointer
+        PGCheckpointer --> Supervisor
+        
         Supervisor --> TriageAgent
         Supervisor --> Investigator
         Supervisor --> ExtIntel
@@ -64,16 +66,16 @@ graph TD
         Supervisor --> Reconciler
     end
     
-    EventBus -->|Trigger Supervisor Mission| Supervisor
+    EventBus --> Supervisor
 
     %% MCP Plane
-    subgraph MCP_Plane ["🔌 Model Context Protocol (MCP) Plane"]
-        ClientAdapter["Unified MCP Client Adapter"]
-        HazardMCP["Hazard MCP Server<br/>(Event History Tools)"]
-        GeoMCP["Geospatial MCP Server<br/>(Geocoding, Distance, Routing)"]
-        ResourceMCP["Resource MCP Server<br/>(Organization & Registry)"]
-        OpsMCP["Operations MCP Server<br/>(Slack & Task Management)"]
-        VerifyMCP["Verification MCP Server<br/>(Claim & Freshness Tools)"]
+    subgraph MCPPlane [Model Context Protocol - MCP - Plane]
+        ClientAdapter[Unified MCP Client Adapter]
+        HazardMCP[Hazard MCP Server - Event History Tools]
+        GeoMCP[Geospatial MCP Server - Geocoding/Routing]
+        ResourceMCP[Resource MCP Server - Organization Registry]
+        OpsMCP[Operations MCP Server - Task Management]
+        VerifyMCP[Verification MCP Server - Claim Verification]
         
         ClientAdapter --> HazardMCP
         ClientAdapter --> GeoMCP
@@ -86,27 +88,39 @@ graph TD
     Investigator --> ClientAdapter
     Reconciler --> ClientAdapter
     
-    HazardMCP <--> Postgres
-    ResourceMCP <--> Postgres
-    OpsMCP <--> Postgres
-    VerifyMCP <--> Postgres
+    HazardMCP --> Postgres
+    Postgres --> HazardMCP
+    
+    ResourceMCP --> Postgres
+    Postgres --> ResourceMCP
+    
+    OpsMCP --> Postgres
+    Postgres --> OpsMCP
+    
+    VerifyMCP --> Postgres
+    Postgres --> VerifyMCP
 
     %% User Interaction Plane
-    subgraph Slack_Surface ["💬 Coordinator Interface (Slack)"]
-        AppHome["Command Center Home Tab<br/>(Live Incident Matrix)"]
-        SlackChannel["Active Crisis Channels<br/>(Block Kit Cards)"]
-        Approvals["Human-in-the-Loop Gates<br/>(Approval Requests)"]
-        BoltHandler["FastAPI /slack/events<br/>(Bolt async Handler)"]
+    subgraph SlackSurface [Coordinator Interface - Slack]
+        AppHome[Command Center Home Tab]
+        SlackChannel[Active Crisis Channels]
+        Approvals[Human-in-the-Loop Gates]
+        BoltHandler[FastAPI /slack/events - Bolt Async Handler]
         
-        BoltHandler <--> AppHome
-        BoltHandler <--> SlackChannel
-        BoltHandler <--> Approvals
+        BoltHandler --> AppHome
+        AppHome --> BoltHandler
+        
+        BoltHandler --> SlackChannel
+        SlackChannel --> BoltHandler
+        
+        BoltHandler --> Approvals
+        Approvals --> BoltHandler
     end
 
-    Supervisor -->|Request Approval| Approvals
-    BoltHandler -->|Grant/Reject Event| EventBus
-    BoltHandler -->|Create/Update Tasks| Postgres
-    EventBus -->|Publish State Revisions| Postgres
+    Supervisor --> Approvals
+    BoltHandler --> EventBus
+    BoltHandler --> Postgres
+    EventBus --> Postgres
 ```
 
 ---
