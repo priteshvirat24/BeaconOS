@@ -17,12 +17,12 @@ Beacon Command is built as an event-driven, multi-plane architecture. Below is a
 ```mermaid
 graph TD
     %% Ingestion Plane
-    subgraph IngestionPlane [Ingestion Plane - Real Data Feeds]
-        USGS[USGS Earthquake Feed - GeoJSON Pollers]
-        GDACS[GDACS RSS and GeoRSS - RSS Parsers]
-        NWS[NWS Weather Alerts - Weather API]
-        Normalizer[Event Normalizer and Deduplicator]
-        Correlator[Spatio-Temporal Correlation Engine]
+    subgraph IngestionPlane ["Ingestion Plane (Real Data Feeds)"]
+        USGS["USGS Earthquake Feed (GeoJSON Pollers)"]
+        GDACS["GDACS RSS and GeoRSS (RSS Parsers)"]
+        NWS["NWS Weather Alerts (Weather API)"]
+        Normalizer["Event Normalizer & Deduplicator"]
+        Correlator["Spatio-Temporal Correlation Engine"]
         
         USGS --> Normalizer
         GDACS --> Normalizer
@@ -31,10 +31,10 @@ graph TD
     end
 
     %% Event Bus & DB
-    subgraph CoreTruth [Core State and Storage]
-        Postgres[(PostgreSQL 16 and pgvector - Durable Truth)]
-        Redis[(Redis Cache and Pub-Sub)]
-        EventBus[Domain Event Publisher]
+    subgraph CoreTruth ["Core State & Storage"]
+        Postgres["PostgreSQL 16 & pgvector Database"]
+        Redis["Redis Cache & Pub-Sub"]
+        EventBus["Domain Event Publisher"]
     end
     
     Correlator --> Postgres
@@ -42,17 +42,17 @@ graph TD
     EventBus --> Redis
 
     %% Agent Supervision Plane
-    subgraph AgentSupervision [Agent Control Plane - LangGraph]
-        Supervisor[Supervisor Orchestrator - LangGraph State Machine]
-        TriageAgent[Triage Agent - Hybrid LLM and Deterministic]
-        Investigator[Workspace Investigator - Iterative Slack Search]
-        ExtIntel[External Intel Agent - MCP Feed Queries]
-        Synthesizer[Evidence Synthesizer - Epistemic Claim Proposal]
-        Planner[DAG Response Planner - Plan Generation]
-        Critic[Red-Team Critic and Risk Assessor]
-        Reconciler[State Reconciler and Conflict Resolver]
+    subgraph AgentSupervision ["Agent Control Plane (LangGraph)"]
+        Supervisor["Supervisor Orchestrator (LangGraph)"]
+        TriageAgent["Triage Agent (Hybrid Heuristics + LLM)"]
+        Investigator["Workspace Investigator (Slack Search)"]
+        ExtIntel["External Intel Agent (MCP Feed Queries)"]
+        Synthesizer["Evidence Synthesizer (Claim Proposal)"]
+        Planner["DAG Response Planner (Plan Generation)"]
+        Critic["Red-Team Critic and Risk Assessor"]
+        Reconciler["State Reconciler and Conflict Resolver"]
         
-        PGCheckpointer[(PostgreSQL State Checkpointer)]
+        PGCheckpointer["PostgreSQL State Checkpointer"]
         
         Supervisor --> PGCheckpointer
         PGCheckpointer --> Supervisor
@@ -69,13 +69,13 @@ graph TD
     EventBus --> Supervisor
 
     %% MCP Plane
-    subgraph MCPPlane [Model Context Protocol - MCP - Plane]
-        ClientAdapter[Unified MCP Client Adapter]
-        HazardMCP[Hazard MCP Server - Event History Tools]
-        GeoMCP[Geospatial MCP Server - Geocoding/Routing]
-        ResourceMCP[Resource MCP Server - Organization Registry]
-        OpsMCP[Operations MCP Server - Task Management]
-        VerifyMCP[Verification MCP Server - Claim Verification]
+    subgraph MCPPlane ["Model Context Protocol (MCP) Plane"]
+        ClientAdapter["Unified MCP Client Adapter"]
+        HazardMCP["Hazard MCP Server (Event History)"]
+        GeoMCP["Geospatial MCP Server (Geocoding & Routing)"]
+        ResourceMCP["Resource MCP Server (Org Registry)"]
+        OpsMCP["Operations MCP Server (Task Management)"]
+        VerifyMCP["Verification MCP Server (Claim Verification)"]
         
         ClientAdapter --> HazardMCP
         ClientAdapter --> GeoMCP
@@ -101,11 +101,11 @@ graph TD
     Postgres --> VerifyMCP
 
     %% User Interaction Plane
-    subgraph SlackSurface [Coordinator Interface - Slack]
-        AppHome[Command Center Home Tab]
-        SlackChannel[Active Crisis Channels]
-        Approvals[Human-in-the-Loop Gates]
-        BoltHandler[FastAPI /slack/events - Bolt Async Handler]
+    subgraph SlackSurface ["Coordinator Interface (Slack)"]
+        AppHome["Command Center Home Tab"]
+        SlackChannel["Active Crisis Channels"]
+        Approvals["Human-in-the-Loop Gates"]
+        BoltHandler["FastAPI /slack/events (Bolt Async Handler)"]
         
         BoltHandler --> AppHome
         AppHome --> BoltHandler
