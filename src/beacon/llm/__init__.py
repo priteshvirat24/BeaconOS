@@ -283,6 +283,107 @@ class OpenAIProvider(LLMProvider):
         return output_schema.model_validate_json(text)
 
 
+def coerce_json_schema_output(text: str, output_schema: Type[T]) -> T:
+    """Resiliently parse and coerce JSON output to match Pydantic schema."""
+    import json
+    try:
+        data = json.loads(text)
+    except Exception:
+        return output_schema.model_validate_json(text)
+
+    # Resilient list coercion helper
+    def coerce_value(val: Any) -> Any:
+        if isinstance(val, list):
+            new_list = []
+            for item in val:
+                if isinstance(item, dict):
+                    str_val = None
+                    for k in ["fallback", "text", "description", "statement", "value", "objective", "name"]:
+                        if k in item and isinstance(item[k], str):
+                            str_val = item[k]
+                            break
+                    if str_val is None:
+                        for k, v in item.items():
+                            if isinstance(v, str):
+                                str_val = v
+                                break
+                    if str_val is not None:
+                        new_list.append(str_val)
+                    else:
+                        new_list.append(json.dumps(item))
+                else:
+                    new_list.append(str(item))
+            return new_list
+        return val
+
+    try:
+        schema_fields = getattr(output_schema, "model_fields", {})
+        for field_name, field_info in schema_fields.items():
+            if field_name in data:
+                annotation_str = str(field_info.annotation)
+                if "list" in annotation_str.lower() and "str" in annotation_str.lower():
+                    data[field_name] = coerce_value(data[field_name])
+        return output_schema.model_validate(data)
+    except Exception:
+        return output_schema.model_validate_json(text)
+
+
+class FreeLLMAPIProvider(OpenAIProvider):
+    """FreeLLMAPI LLM provider used as a first fallback."""
+
+    def __init__(self, api_key: str, base_url: str, model: str = "gpt-4o"):
+        super().__init__(api_key=api_key, model=model, base_url=base_url)
+
+    @property
+    def provider_name(self) -> str:
+        return "freellmapi"
+
+    async def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        output_schema: Type[T],
+        *,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        import json
+        client = self._get_client()
+
+        schema_json = json.dumps(output_schema.model_json_schema(), indent=2)
+        enhanced_messages = list(messages)
+
+        system_found = False
+        for i, msg in enumerate(enhanced_messages):
+            if msg["role"] == "system":
+                enhanced_messages[i] = {
+                    "role": "system",
+                    "content": (
+                        f"{msg['content']}\n\n"
+                        f"Respond with valid JSON matching this schema:\n{schema_json}"
+                    ),
+                }
+                system_found = True
+                break
+        if not system_found:
+            enhanced_messages.insert(0, {
+                "role": "system",
+                "content": f"Respond with valid JSON matching this schema:\n{schema_json}",
+            })
+
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": enhanced_messages,
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        }
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        response = client.chat.completions.create(**kwargs)
+        text = response.choices[0].message.content or "{}"
+        return coerce_json_schema_output(text, output_schema)
+
+
 class MistralProvider(LLMProvider):
     """Mistral LLM provider used as a fallback."""
 
@@ -366,49 +467,7 @@ class MistralProvider(LLMProvider):
             response_format={"type": "json_object"},
         )
         text = response.choices[0].message.content or "{}"
-        
-        import json
-        try:
-            data = json.loads(text)
-        except Exception:
-            return output_schema.model_validate_json(text)
-
-        # Resilient list coercion helper
-        def coerce_value(val: Any) -> Any:
-            if isinstance(val, list):
-                new_list = []
-                for item in val:
-                    if isinstance(item, dict):
-                        # Try to find a string value in the dict
-                        str_val = None
-                        for k in ["fallback", "text", "description", "statement", "value", "objective", "name"]:
-                            if k in item and isinstance(item[k], str):
-                                str_val = item[k]
-                                break
-                        if str_val is None:
-                            for k, v in item.items():
-                                if isinstance(v, str):
-                                    str_val = v
-                                    break
-                        if str_val is not None:
-                            new_list.append(str_val)
-                        else:
-                            new_list.append(json.dumps(item))
-                    else:
-                        new_list.append(str(item))
-                return new_list
-            return val
-
-        try:
-            schema_fields = getattr(output_schema, "model_fields", {})
-            for field_name, field_info in schema_fields.items():
-                if field_name in data:
-                    annotation_str = str(field_info.annotation)
-                    if "list" in annotation_str.lower() and "str" in annotation_str.lower():
-                        data[field_name] = coerce_value(data[field_name])
-            return output_schema.model_validate(data)
-        except Exception:
-            return output_schema.model_validate_json(text)
+        return coerce_json_schema_output(text, output_schema)
 
 
 class StructuredLLMClient:
@@ -423,23 +482,37 @@ class StructuredLLMClient:
         self.provider = provider
         self.max_retries = max_retries
         self.prompt_version = prompt_version
-        self._fallback_provider: Optional[LLMProvider] = None
-        self._fallback_resolved = False
+        self._fallback_providers: list[LLMProvider] = []
+        self._fallbacks_resolved = False
 
-    def _get_fallback_provider(self) -> Optional[LLMProvider]:
-        if not self._fallback_resolved:
+    def _get_fallback_providers(self) -> list[LLMProvider]:
+        if not self._fallbacks_resolved:
             try:
                 from beacon.config import get_settings
                 settings = get_settings()
+                
+                # 1. First Fallback: FreeLLMAPI
+                if settings.freellmapi_api_key and settings.freellmapi_base_url:
+                    self._fallback_providers.append(
+                        FreeLLMAPIProvider(
+                            api_key=settings.freellmapi_api_key,
+                            base_url=settings.freellmapi_base_url,
+                            model="gpt-4o",
+                        )
+                    )
+                
+                # 2. Second Fallback: Mistral
                 if settings.mistral_api_key:
-                    self._fallback_provider = MistralProvider(
-                        api_key=settings.mistral_api_key,
-                        model=settings.mistral_model or "mistral-large-latest",
+                    self._fallback_providers.append(
+                        MistralProvider(
+                            api_key=settings.mistral_api_key,
+                            model=settings.mistral_model or "mistral-large-latest",
+                        )
                     )
             except Exception:
                 pass
-            self._fallback_resolved = True
-        return self._fallback_provider
+            self._fallbacks_resolved = True
+        return self._fallback_providers
 
     async def generate(
         self,
@@ -449,7 +522,7 @@ class StructuredLLMClient:
         max_tokens: Optional[int] = None,
         agent_id: Optional[str] = None,
     ) -> tuple[str, ModelInvocationRecord]:
-        """Generate text with retry and fallback."""
+        """Generate text with retry and fallback chain."""
         invocation_id = str(uuid.uuid4())
         start = time.monotonic()
         last_error: Optional[Exception] = None
@@ -484,8 +557,11 @@ class StructuredLLMClient:
                     sleep_time = 5 * (attempt + 1)
                     await asyncio.sleep(sleep_time)
 
-        fallback = self._get_fallback_provider()
-        if fallback and self.provider.provider_name != "mistral":
+        # Fallback Chain
+        for fallback in self._get_fallback_providers():
+            if fallback.provider_name == self.provider.provider_name:
+                continue
+
             logger.warning(
                 "generation_fallback_triggered",
                 original_provider=self.provider.provider_name,
@@ -537,7 +613,7 @@ class StructuredLLMClient:
         max_tokens: Optional[int] = None,
         agent_id: Optional[str] = None,
     ) -> tuple[T, ModelInvocationRecord]:
-        """Generate structured output with retry and fallback."""
+        """Generate structured output with retry and fallback chain."""
         invocation_id = str(uuid.uuid4())
         start = time.monotonic()
         last_error: Optional[Exception] = None
@@ -575,8 +651,11 @@ class StructuredLLMClient:
                     sleep_time = 5 * (attempt + 1)
                     await asyncio.sleep(sleep_time)
 
-        fallback = self._get_fallback_provider()
-        if fallback and self.provider.provider_name != "mistral":
+        # Fallback Chain
+        for fallback in self._get_fallback_providers():
+            if fallback.provider_name == self.provider.provider_name:
+                continue
+
             logger.warning(
                 "structured_generation_fallback_triggered",
                 original_provider=self.provider.provider_name,
