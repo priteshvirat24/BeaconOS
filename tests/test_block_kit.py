@@ -92,7 +92,8 @@ class TestSurfaces:
             crisis_id="abc-123",
         )
         assert len(blocks) > 0
-        assert blocks[0]["type"] == "header"
+        assert blocks[0]["type"] == "section"
+        assert "warning" in blocks[0]["text"]["text"].lower()
 
     def test_situation_brief_blocks(self) -> None:
         blocks = situation_brief_blocks(
@@ -107,6 +108,7 @@ class TestSurfaces:
             crisis_id="abc-123",
         )
         assert len(blocks) > 0
+        assert blocks[0]["type"] == "section"
 
     def test_intelligence_request_blocks(self) -> None:
         blocks = intelligence_request_blocks(
@@ -117,6 +119,7 @@ class TestSurfaces:
             request_id="req-123",
         )
         assert len(blocks) > 0
+        assert blocks[0]["type"] == "section"
 
     def test_approval_request_blocks(self) -> None:
         blocks = approval_request_blocks(
@@ -127,6 +130,7 @@ class TestSurfaces:
             approval_id="appr-123",
         )
         assert len(blocks) > 0
+        assert blocks[0]["type"] == "section"
 
     def test_app_home_blocks(self) -> None:
         blocks = app_home_blocks(
@@ -137,3 +141,6 @@ class TestSurfaces:
             active_missions=5,
         )
         assert len(blocks) > 0
+        # Should contain section and divider blocks
+        assert any(b["type"] == "section" for b in blocks)
+        assert any(b["type"] == "divider" for b in blocks)

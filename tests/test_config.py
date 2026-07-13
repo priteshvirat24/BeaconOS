@@ -43,17 +43,17 @@ class TestBeaconSettings:
         settings = BeaconSettings(slack_bot_token="xoxb-test", slack_signing_secret="secret")
         assert settings.is_slack_configured is True
 
-        settings_no_slack = BeaconSettings()
+        settings_no_slack = BeaconSettings(slack_bot_token="", slack_signing_secret="")
         assert settings_no_slack.is_slack_configured is False
 
     def test_require_slack_fails(self) -> None:
         """require_slack should raise when Slack is not configured."""
-        settings = BeaconSettings()
+        settings = BeaconSettings(slack_bot_token="")
         with pytest.raises(ValueError, match="SLACK_BOT_TOKEN"):
             settings.require_slack()
 
     def test_require_llm_fails(self) -> None:
         """require_llm should raise when LLM is not configured."""
-        settings = BeaconSettings(llm_provider="gemini")
+        settings = BeaconSettings(llm_provider="gemini", gemini_api_key="")
         with pytest.raises(ValueError, match="GEMINI_API_KEY"):
             settings.require_llm()

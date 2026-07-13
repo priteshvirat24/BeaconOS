@@ -81,38 +81,78 @@ class BlockBuilder:
         })
         return self
 
+    def _create_card(
+        self,
+        title: str,
+        body: str,
+        *,
+        subtitle: str | None = None,
+        actions: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        blocks = []
+        
+        # Build premium callout layout using unicode borders & blockquotes
+        mrkdwn_text = f"> 📍 *{title[:150]}*\n"
+        if subtitle:
+            mrkdwn_text += f"> _Subtitle: {subtitle}_\n"
+        mrkdwn_text += f"> ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        
+        body_lines = body.split("\n")
+        for line in body_lines:
+            mrkdwn_text += f"> {line}\n"
+            
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": mrkdwn_text}
+        })
+        
+        if actions:
+            blocks.append({
+                "type": "actions",
+                "elements": actions
+            })
+        return blocks
+
     def card(
         self,
         title: str,
         body: str,
         *,
-        subtitle: Optional[str] = None,
-        actions: Optional[list[dict[str, Any]]] = None,
+        subtitle: str | None = None,
+        actions: list[dict[str, Any]] | None = None,
     ) -> BlockBuilder:
-        card_obj: dict[str, Any] = {
-            "title": {"type": "plain_text", "text": title[:150]},
-            "body": {"type": "mrkdwn", "text": body[:3000]},
-        }
-        if subtitle:
-            card_obj["subtitle"] = {"type": "mrkdwn", "text": subtitle[:3000]}
-        
-        block: dict[str, Any] = {
-            "type": "card",
-            "card": card_obj
-        }
-        if actions:
-            block["actions"] = actions
-        self._blocks.append(block)
+        self._blocks.extend(self._create_card(title, body, subtitle=subtitle, actions=actions))
+        self._blocks.append({"type": "divider"})
+        return self
+
+    def carousel(self, cards: list[list[dict[str, Any]]]) -> BlockBuilder:
+        for idx, card_blocks in enumerate(cards):
+            if idx > 0:
+                self._blocks.append({"type": "divider"})
+            self._blocks.extend(card_blocks)
         return self
 
     def alert(self, text: str, level: str = "warning") -> BlockBuilder:
+        emoji_map = {
+            "error": "🚨 *CRITICAL ALERT*",
+            "warning": "⚠️ *WARNING ALERT*",
+            "success": "✅ *SUCCESS REPORT*",
+            "info": "ℹ️ *SYSTEM UPDATE*",
+            "default": "📢 *NOTICE BRIEF*"
+        }
+        prefix = emoji_map.get(level.lower(), "📢 *NOTICE BRIEF*")
+        
+        # Build premium callout layout for alert
+        mrkdwn_text = f"> {prefix}\n> ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body_lines = text.split("\n")
+        for line in body_lines:
+            mrkdwn_text += f"> {line}\n"
+            
         self._blocks.append({
-            "type": "alert",
-            "alert": {
-                "level": level,
-                "text": {"type": "mrkdwn", "text": text[:3000]}
-            }
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": mrkdwn_text}
         })
+        self._blocks.append({"type": "divider"})
         return self
 
     def actions(self, buttons: list[dict[str, Any]]) -> BlockBuilder:
@@ -158,23 +198,37 @@ def hazard_alert_blocks(
 ) -> list[dict[str, Any]]:
     """Build hazard alert Block Kit surface."""
     chip = severity_emoji(severity)
+    
+    # Map severity to alert level
+    alert_level = "info"
+    if severity.lower() == "extreme":
+        alert_level = "error"
+    elif severity.lower() in ("severe", "high"):
+        alert_level = "warning"
 
     b = BlockBuilder()
-    b.header(f"{chip} Hazard Alert: {title[:100]}")
-    b.fields([
-        ("Type", hazard_type.replace("_", " ").title()),
-        ("Severity", f"{chip} {severity.upper()}"),
-        ("Magnitude", str(magnitude) if magnitude else "N/A"),
-        ("Location", location),
-        ("Time", event_time),
-        ("Source", source),
-    ])
-    b.divider()
-    b.actions([
-        b.button("🔍 Investigate", "investigate_hazard", value=crisis_id, style="primary"),
-        b.button("📋 Create Crisis", "create_crisis", value=crisis_id),
-        b.button("🔕 Dismiss", "dismiss_hazard", value=crisis_id),
-    ])
+    b.alert(
+        text=f"🚨 *{severity.upper()} Hazard Alert:* {title[:100]}",
+        level=alert_level
+    )
+    
+    body = (
+        f"*Magnitude:* {magnitude if magnitude else 'N/A'}\n"
+        f"*Location:* {location}\n"
+        f"*Time:* {event_time}\n"
+        f"*Source:* {source}"
+    )
+    
+    b.card(
+        title=f"{chip} {hazard_type.replace('_', ' ').title()}",
+        subtitle=f"Crisis ID: {crisis_id}",
+        body=body,
+        actions=[
+            b.button("🔍 Investigate", "investigate_hazard", value=crisis_id, style="primary"),
+            b.button("📋 Create Crisis", "create_crisis", value=crisis_id),
+            b.button("🔕 Dismiss", "dismiss_hazard", value=crisis_id),
+        ]
+    )
     return b.build()
 
 
@@ -195,25 +249,38 @@ def situation_brief_blocks(
         "resolved": "✅", "detected": "⚠️",
     }.get(status.lower(), "⚪")
 
+    alert_level = "info"
+    if status.lower() in ("active", "detected"):
+        alert_level = "warning"
+    elif status.lower() == "resolved":
+        alert_level = "success"
+
     b = BlockBuilder()
-    b.header(f"{status_emoji} Situation Brief: {crisis_title[:100]}")
-    b.section(summary[:2000])
-    b.divider()
-    b.fields([
-        ("Status", f"{status_emoji} {status.upper()}"),
-        ("Evidence", str(evidence_count)),
-        ("Verified Claims", str(verified_claims)),
-        ("Contested Claims", str(contested_claims)),
-        ("Critical Gaps", str(critical_gaps)),
-        ("Active Tasks", str(active_tasks)),
-    ])
-    b.divider()
-    b.actions([
-        b.button("📊 Full Situation", "view_situation", value=crisis_id, style="primary"),
-        b.button("🔍 Evidence", "view_evidence", value=crisis_id),
-        b.button("📋 Tasks", "view_tasks", value=crisis_id),
-        b.button("⚠️ Gaps", "view_gaps", value=crisis_id),
-    ])
+    b.alert(
+        text=f"📊 *Crisis Briefing Updated* · Status: {status.upper()}",
+        level=alert_level
+    )
+
+    body = (
+        f"{summary[:1500]}\n\n"
+        f"*Current Metrics:*\n"
+        f"· *Evidence collected:* {evidence_count}\n"
+        f"· *Verified Claims:* {verified_claims} · *Contested Claims:* {contested_claims}\n"
+        f"· *Critical Gaps:* {critical_gaps} identified\n"
+        f"· *Active Tasks:* {active_tasks} in progress"
+    )
+
+    b.card(
+        title=f"{status_emoji} {crisis_title[:100]}",
+        subtitle="Mission Situation Brief",
+        body=body,
+        actions=[
+            b.button("📊 Full Situation", "view_situation", value=crisis_id, style="primary"),
+            b.button("🔍 Evidence", "view_evidence", value=crisis_id),
+            b.button("📋 Tasks", "view_tasks", value=crisis_id),
+            b.button("⚠️ Gaps", "view_gaps", value=crisis_id),
+        ]
+    )
     return b.build()
 
 
@@ -229,18 +296,34 @@ def intelligence_request_blocks(
         urgency.lower(), "🟡"
     )
 
+    alert_level = "info"
+    if urgency.lower() == "critical":
+        alert_level = "error"
+    elif urgency.lower() == "high":
+        alert_level = "warning"
+
     b = BlockBuilder()
-    b.header(f"{urgency_emoji} Intelligence Request")
-    b.section(f"*Question:*\n{question}")
-    b.section(f"*Why this information is needed:*\n{why_needed}")
-    b.context(f"Crisis: {crisis_title} | Urgency: {urgency.upper()}")
-    b.divider()
-    b.actions([
-        b.button("✅ Provide Update", "provide_intel_update", value=request_id, style="primary"),
-        b.button("👤 Assign to Someone", "assign_intel_request", value=request_id),
-        b.button("❌ Unable to Verify", "unable_to_verify", value=request_id),
-        b.button("⬆️ Escalate", "escalate_intel_request", value=request_id),
-    ])
+    b.alert(
+        text=f"🤔 *New Intelligence Request* · Urgency: {urgency.upper()}",
+        level=alert_level
+    )
+
+    body = (
+        f"*Question:*\n{question}\n\n"
+        f"*Why Needed:*\n{why_needed}"
+    )
+
+    b.card(
+        title=f"{urgency_emoji} Info Required",
+        subtitle=f"Crisis: {crisis_title}",
+        body=body,
+        actions=[
+            b.button("✅ Provide Update", "provide_intel_update", value=request_id, style="primary"),
+            b.button("👤 Assign", "assign_intel_request", value=request_id),
+            b.button("❌ Unable to Verify", "unable_to_verify", value=request_id),
+            b.button("⬆️ Escalate", "escalate_intel_request", value=request_id),
+        ]
+    )
     return b.build()
 
 
@@ -253,18 +336,28 @@ def approval_request_blocks(
 ) -> list[dict[str, Any]]:
     """Build approval request Block Kit surface."""
     b = BlockBuilder()
-    b.header("🔐 Approval Required")
-    b.section(f"*Action:*\n{action_description}")
-    b.section(f"*Rationale:*\n{rationale}")
+    b.alert(
+        text="🔐 *Authorization Required* · Action needs human verification",
+        level="warning"
+    )
+
+    body = (
+        f"*Action to Authorize:*\n{action_description}\n\n"
+        f"*Rationale:*\n{rationale}"
+    )
     if risks:
-        b.section(f"*Risks:*\n{risks}")
-    b.context(f"Authority Required: {authority_required}")
-    b.divider()
-    b.actions([
-        b.button("✅ Approve", "approve_action", value=approval_id, style="primary"),
-        b.button("❌ Reject", "reject_action", value=approval_id, style="danger"),
-        b.button("✏️ Modify", "modify_action", value=approval_id),
-    ])
+        body += f"\n\n*Identified Risks:*\n{risks}"
+
+    b.card(
+        title="Approve Operational Write",
+        subtitle=f"Required Authority: {authority_required}",
+        body=body,
+        actions=[
+            b.button("✅ Approve", "approve_action", value=approval_id, style="primary"),
+            b.button("❌ Reject", "reject_action", value=approval_id, style="danger"),
+            b.button("✏️ Modify", "modify_action", value=approval_id),
+        ]
+    )
     return b.build()
 
 
@@ -283,7 +376,6 @@ def task_card_blocks(
     }.get(status.lower(), "⚪")
 
     b = BlockBuilder()
-    
     body_text = f"Assigned: {assigned_to}\nDeadline: {deadline or 'None'} | Priority: {priority}"
     
     b.card(
@@ -303,7 +395,7 @@ def error_blocks(
     error_title: str,
     error_detail: str,
     degraded_mode: bool = False,
-) -> list[dict[str, Any]]:
+ ) -> list[dict[str, Any]]:
     """Build error/degraded mode Block Kit surface."""
     b = BlockBuilder()
     
@@ -325,15 +417,21 @@ def commitment_confirmation_blocks(
 ) -> list[dict[str, Any]]:
     """Build commitment confirmation Block Kit surface."""
     b = BlockBuilder()
-    b.header("📌 Commitment Detected")
-    b.section(f"*Statement:*\n_{statement}_")
-    b.context(f"By: {committer} | <{source_link}|View Source>")
-    b.divider()
-    b.actions([
-        b.button("✅ Confirm", "confirm_commitment", value=commitment_id, style="primary"),
-        b.button("✏️ Edit", "edit_commitment", value=commitment_id),
-        b.button("🚫 Ignore", "ignore_commitment", value=commitment_id),
-    ])
+    b.alert(
+        text="📌 *Commitment Detected in Chat*",
+        level="info"
+    )
+
+    b.card(
+        title="Commitment Confirmation",
+        subtitle=f"By: {committer}",
+        body=f"_{statement}_\n\n<{source_link}|View Source Message>",
+        actions=[
+            b.button("✅ Confirm", "confirm_commitment", value=commitment_id, style="primary"),
+            b.button("✏️ Edit", "edit_commitment", value=commitment_id),
+            b.button("🚫 Ignore", "ignore_commitment", value=commitment_id),
+        ]
+    )
     return b.build()
 
 
@@ -360,33 +458,42 @@ def app_home_blocks(
     ])
     b.divider()
 
-    # Crisis list — most urgent first (highest severity score), then a clear
-    # path from App Home into the live Mission Timeline for each crisis.
     if active_crises:
-        b.section("*Active Crises* — most urgent first")
+        b.section("*Active Crises* — swipe to explore")
         ordered = sorted(
             active_crises[:10],
             key=lambda c: c.get("severity_score", 0.0),
             reverse=True,
         )
+        
+        cards = []
         for crisis in ordered:
             chip = severity_emoji(crisis.get("severity", ""))
-            b.section(
-                f"{chip} *{crisis['title']}*\n"
-                f"Status: {crisis['status']} | Evidence: {crisis.get('evidence_count', 0)} | "
-                f"Tasks: {crisis.get('task_count', 0)}",
+            score = crisis.get("severity_score", 0.0)
+            
+            body = (
+                f"Status: {crisis['status'].upper()}\n"
+                f"Severity: {chip} {crisis.get('severity', '').upper()} ({score:.1f})\n"
+                f"Evidence Items: {crisis.get('evidence_count', 0)} · Tasks: {crisis.get('task_count', 0)}"
             )
-            b.actions([
-                b.button(
-                    "📊 Open", f"open_crisis_{crisis['id']}", value=str(crisis["id"])
-                ),
-                b.button(
-                    "🛰️ Mission Timeline",
-                    "view_mission_timeline",
-                    value=str(crisis["id"]),
-                    style="primary",
-                ),
-            ])
+            
+            card = b._create_card(
+                title=f"{chip} {crisis['title'][:60]}",
+                subtitle="Active Crisis Details",
+                body=body,
+                actions=[
+                    b.button("📊 Open", f"open_crisis_{crisis['id']}", value=str(crisis["id"])),
+                    b.button(
+                        "🛰️ Mission Timeline",
+                        "view_mission_timeline",
+                        value=str(crisis["id"]),
+                        style="primary",
+                    ),
+                ]
+            )
+            cards.append(card)
+            
+        b.carousel(cards)
     else:
         b.section("_No active crises. Beacon is monitoring hazard feeds._")
 

@@ -99,17 +99,74 @@ def mission_timeline_blocks(state: dict[str, Any]) -> list[dict[str, Any]]:
     total = len(STAGE_ORDER)
 
     stage_num = min(done_count + (0 if done_count == total else 1), total)
-    # Uniform severity chip, shared with hazard alerts / situation briefs.
-    label = severity_label_for_score(state.get("severity_score"))
-    chip = severity_emoji(label)
+    label_severity = severity_label_for_score(state.get("severity_score"))
+    chip = severity_emoji(label_severity)
+
+    # 1. Determine alert level and text
+    is_finished = done_count == total
+    has_errors = any(completed[n].get("status") == "failed" for n in completed)
+    has_flags = any(
+        completed[n].get("metrics", {}).get("risk_flags", 0) > 0 
+        for n in completed if "metrics" in completed[n]
+    )
+    
+    if is_finished:
+        if has_errors or has_flags:
+            alert_level = "warning"
+            alert_text = "⚠️ *Timeline Complete with Warning* · Multi-agent analysis concluded with flags."
+        else:
+            alert_level = "success"
+            alert_text = "✅ *Timeline Complete* · Multi-agent analysis successfully completed."
+    else:
+        alert_level = "info"
+        alert_text = f"🔄 *Live Mission Timeline* · Stage {stage_num}/{total} under evaluation..."
+
     b = BlockBuilder()
     b.header(f"{chip} Mission Timeline: {title[:78]}")
+    b.alert(text=alert_text, level=alert_level)
+    
+    # 2. Add progress bar context
     progress_bar = "▓" * done_count + "░" * (total - done_count)
-    b.context(
-        f"`{progress_bar}`  Stage {stage_num}/{total}  ·  Live multi-agent reasoning"
-    )
+    b.context(f"`{progress_bar}` Stage {stage_num}/{total} · Real-time graph progression")
     b.divider()
 
+    # 3. Highlight active stage inside card or show final summary card if finished
+    for node_id in STAGE_ORDER:
+        status = _stage_status(node_id, state)
+        if status == "running":
+            emoji = STAGE_EMOJI[node_id]
+            label = STAGE_LABELS[node_id]
+            b.card(
+                title=f"🔄 Current: {label}",
+                subtitle=f"{emoji} Stage {stage_num}/{total} · Agent reasoning in progress",
+                body="The agent is currently evaluating evidence, running context queries, or synthesizing response plans..."
+            )
+            break
+            
+    if is_finished:
+        evidence_total = len(state.get('evidence_items', []))
+        claims_total = len(state.get('claims', []))
+        
+        # Pull final metrics from critique stage
+        critique_metrics = completed.get("critique", {}).get("metrics", {})
+        risk_flags = critique_metrics.get("risk_flags", 0)
+        spofs = critique_metrics.get("spofs", 0)
+        final_severity = critique_metrics.get("severity_score", state.get("severity_score") or 0.0)
+        
+        body_summary = (
+            f"· *Evidence Collected:* {evidence_total} items verified\n"
+            f"· *Claims Synthesized:* {claims_total} structural facts\n"
+            f"· *Risk Flags Raised:* {risk_flags} (Single points of failure: {spofs})\n"
+            f"· *Final Severity Score:* {float(final_severity):.2f}"
+        )
+        b.card(
+            title="✅ Response Analysis Concluded",
+            subtitle=f"{chip} Objective Reached",
+            body=body_summary
+        )
+
+    # 4. List all stages cleanly using section blocks
+    b.section("*Agent Pipeline Progression:*")
     for node_id in STAGE_ORDER:
         status = _stage_status(node_id, state)
         icon = {
@@ -120,13 +177,14 @@ def mission_timeline_blocks(state: dict[str, Any]) -> list[dict[str, Any]]:
         }[status]
         label = STAGE_LABELS[node_id]
         emoji = STAGE_EMOJI[node_id]
+        
         if status in ("done", "flagged"):
             detail = _stage_metric_text(node_id, state)
+            b.section(f"{icon} {emoji} *{label}*\n{detail}")
         elif status == "running":
-            detail = "_reasoning…_"
+            b.section(f"{icon} {emoji} *{label}* (running details in Card above)")
         else:
-            detail = "_queued_"
-        b.section(f"{icon} {emoji} *{label}*\n{detail}")
+            b.section(f"{icon} {emoji} *{label}* (queued)")
 
     b.divider()
     b.context(
