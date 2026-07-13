@@ -331,7 +331,7 @@ def coerce_json_schema_output(text: str, output_schema: Type[T]) -> T:
 class FreeLLMAPIProvider(OpenAIProvider):
     """FreeLLMAPI LLM provider used as a first fallback."""
 
-    def __init__(self, api_key: str, base_url: str, model: str = "gpt-4o"):
+    def __init__(self, api_key: str, base_url: str, model: str = "auto"):
         super().__init__(api_key=api_key, model=model, base_url=base_url)
 
     @property
@@ -497,7 +497,7 @@ class StructuredLLMClient:
                         FreeLLMAPIProvider(
                             api_key=settings.freellmapi_api_key,
                             base_url=settings.freellmapi_base_url,
-                            model="gpt-4o",
+                            model="auto",
                         )
                     )
                 
