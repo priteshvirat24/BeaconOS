@@ -201,7 +201,7 @@ class OpenAIProvider(LLMProvider):
         if self._client is None:
             from openai import OpenAI
 
-            kwargs: dict[str, Any] = {"api_key": self._api_key}
+            kwargs: dict[str, Any] = {"api_key": self._api_key, "timeout": 30.0}
             if self._base_url:
                 kwargs["base_url"] = self._base_url
             self._client = OpenAI(**kwargs)
@@ -405,7 +405,7 @@ class MistralProvider(LLMProvider):
     def _get_client(self) -> Any:
         if self._client is None:
             from mistralai.client import Mistral
-            self._client = Mistral(api_key=self._api_key)
+            self._client = Mistral(api_key=self._api_key, timeout_ms=30000)
         return self._client
 
     @property
