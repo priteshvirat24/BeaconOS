@@ -1,0 +1,113 @@
+{
+  "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.3f4e082c875eec4a12ff5a6685974698b4b50bfb.001.1",
+  "type": "Feature",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          -102.29,
+          32.01
+        ],
+        [
+          -102.02,
+          32.08
+        ],
+        [
+          -101.94,
+          31.92
+        ],
+        [
+          -102.18,
+          31.89
+        ],
+        [
+          -102.22,
+          31.88
+        ],
+        [
+          -102.29,
+          32
+        ],
+        [
+          -102.29,
+          32.01
+        ]
+      ]
+    ]
+  },
+  "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.3f4e082c875eec4a12ff5a6685974698b4b50bfb.001.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.3f4e082c875eec4a12ff5a6685974698b4b50bfb.001.1",
+    "areaDesc": "Midland, TX",
+    "geocode": {
+      "SAME": [
+        "048329"
+      ],
+      "UGC": [
+        "TXC329"
+      ]
+    },
+    "affectedZones": [
+      "https://api.weather.gov/zones/county/TXC329"
+    ],
+    "references": [],
+    "sent": "2026-07-13T12:35:00-05:00",
+    "effective": "2026-07-13T12:35:00-05:00",
+    "onset": "2026-07-13T12:35:00-05:00",
+    "expires": "2026-07-13T15:30:00-05:00",
+    "ends": "2026-07-13T15:30:00-05:00",
+    "status": "Actual",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Severe",
+    "certainty": "Likely",
+    "urgency": "Immediate",
+    "event": "Flash Flood Warning",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Midland/Odessa TX",
+    "headline": "Flash Flood Warning issued July 13 at 12:35PM CDT until July 13 at 3:30PM CDT by NWS Midland/Odessa TX",
+    "description": "FFWMAF\n\nThe National Weather Service in Midland/Odessa has issued a\n\n* Flash Flood Warning for...\nNorthwestern Midland County in western Texas...\n\n* Until 330 PM CDT.\n\n* At 1235 PM CDT, trained weather spotters reported thunderstorms\nproducing heavy rain across the warned area. Between 0.5 and 1.5\ninches of rain have fallen. Flash flooding is ongoing or expected\nto begin shortly.\n\nHAZARD...Flash flooding caused by thunderstorms.\n\nSOURCE...Trained spotter reported water over the road at the\nintersection of State Hwy 349 and I-20.\n\nIMPACT...Flash flooding of small creeks and streams, urban areas,\nhighways, streets and underpasses as well as other poor\ndrainage and low-lying areas.\n\n* Some locations that will experience flash flooding include...\nMidland, Midland International Air and Space Port, Midland Airpark,\nCotton Flat and Warfield.",
+    "instruction": "Turn around, don't drown when encountering flooded roads. Most flood\ndeaths occur in vehicles.\n\nBe aware of your surroundings and do not drive on flooded roads.",
+    "response": "Avoid",
+    "note": null,
+    "parameters": {
+      "AWIPSidentifier": [
+        "FFWMAF"
+      ],
+      "WMOidentifier": [
+        "WGUS54 KMAF 131735"
+      ],
+      "flashFloodDetection": [
+        "OBSERVED"
+      ],
+      "BLOCKCHANNEL": [
+        "EAS",
+        "NWEM",
+        "CMAS"
+      ],
+      "EAS-ORG": [
+        "WXR"
+      ],
+      "VTEC": [
+        "/O.NEW.KMAF.FF.W.0123.260713T1735Z-260713T2030Z/"
+      ],
+      "eventEndingTime": [
+        "2026-07-13T15:30:00-05:00"
+      ]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": {
+      "SAME": [
+        "FFW"
+      ],
+      "NationalWeatherService": [
+        "FFW"
+      ]
+    }
+  }
+}
