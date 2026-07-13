@@ -409,7 +409,7 @@ class MistralProvider(LLMProvider):
     def _get_client(self) -> Any:
         if self._client is None:
             from mistralai.client import Mistral
-            self._client = Mistral(api_key=self._api_key, timeout_ms=30000)
+            self._client = Mistral(api_key=self._api_key, timeout_ms=90000)
         return self._client
 
     @property
