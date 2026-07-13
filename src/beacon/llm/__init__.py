@@ -286,10 +286,20 @@ class OpenAIProvider(LLMProvider):
 def coerce_json_schema_output(text: str, output_schema: Type[T]) -> T:
     """Resiliently parse and coerce JSON output to match Pydantic schema."""
     import json
+    
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+
     try:
-        data = json.loads(text)
+        data = json.loads(stripped)
     except Exception:
-        return output_schema.model_validate_json(text)
+        return output_schema.model_validate_json(stripped)
 
     # Resilient list coercion helper
     def coerce_value(val: Any) -> Any:
