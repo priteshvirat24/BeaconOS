@@ -366,7 +366,49 @@ class MistralProvider(LLMProvider):
             response_format={"type": "json_object"},
         )
         text = response.choices[0].message.content or "{}"
-        return output_schema.model_validate_json(text)
+        
+        import json
+        try:
+            data = json.loads(text)
+        except Exception:
+            return output_schema.model_validate_json(text)
+
+        # Resilient list coercion helper
+        def coerce_value(val: Any) -> Any:
+            if isinstance(val, list):
+                new_list = []
+                for item in val:
+                    if isinstance(item, dict):
+                        # Try to find a string value in the dict
+                        str_val = None
+                        for k in ["fallback", "text", "description", "statement", "value", "objective", "name"]:
+                            if k in item and isinstance(item[k], str):
+                                str_val = item[k]
+                                break
+                        if str_val is None:
+                            for k, v in item.items():
+                                if isinstance(v, str):
+                                    str_val = v
+                                    break
+                        if str_val is not None:
+                            new_list.append(str_val)
+                        else:
+                            new_list.append(json.dumps(item))
+                    else:
+                        new_list.append(str(item))
+                return new_list
+            return val
+
+        try:
+            schema_fields = getattr(output_schema, "model_fields", {})
+            for field_name, field_info in schema_fields.items():
+                if field_name in data:
+                    annotation_str = str(field_info.annotation)
+                    if "list" in annotation_str.lower() and "str" in annotation_str.lower():
+                        data[field_name] = coerce_value(data[field_name])
+            return output_schema.model_validate(data)
+        except Exception:
+            return output_schema.model_validate_json(text)
 
 
 class StructuredLLMClient:
