@@ -1,16 +1,49 @@
 """Tests for Beacon Command — Block Kit Builders."""
 
+import json
+
 from beacon.slack.block_kit import (
     BlockBuilder,
-    hazard_alert_blocks,
-    situation_brief_blocks,
-    intelligence_request_blocks,
-    approval_request_blocks,
-    task_card_blocks,
-    error_blocks,
-    commitment_confirmation_blocks,
     app_home_blocks,
+    approval_request_blocks,
+    hazard_alert_blocks,
+    intelligence_request_blocks,
+    severity_emoji,
+    severity_label_for_score,
+    situation_brief_blocks,
 )
+
+
+class TestSeveritySystem:
+    def test_severity_emoji_uniform(self) -> None:
+        assert severity_emoji("extreme") == "🔴"
+        assert severity_emoji("severe") == "🟠"
+        assert severity_emoji("low") == "⚪"
+        assert severity_emoji("unknown-value") == "⚪"
+
+    def test_score_to_label_bands(self) -> None:
+        assert severity_label_for_score(8.5) == "extreme"
+        assert severity_label_for_score(7.0) == "severe"
+        assert severity_label_for_score(4.5) == "high"
+        assert severity_label_for_score(None) == "moderate"
+
+
+class TestAppHomeMissionTimelinePath:
+    def test_orders_by_severity_and_exposes_timeline_button(self) -> None:
+        blocks = app_home_blocks(
+            active_crises=[
+                {"id": "c1", "title": "Minor Quake", "status": "active",
+                 "severity": "high", "severity_score": 5.1},
+                {"id": "c2", "title": "Major Flood", "status": "active",
+                 "severity": "extreme", "severity_score": 8.2},
+            ],
+            pending_approvals=0, at_risk_tasks=0, overdue_tasks=0, active_missions=0,
+        )
+        text = json.dumps(blocks, ensure_ascii=False)
+        # Most urgent (extreme, 8.2) rendered before the lower-severity crisis.
+        assert text.index("Major Flood") < text.index("Minor Quake")
+        # Visible path from App Home into the Mission Timeline.
+        assert "view_mission_timeline" in text
 
 
 class TestBlockBuilder:

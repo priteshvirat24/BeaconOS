@@ -6,7 +6,38 @@ Avoids giant raw JSON dictionaries throughout handlers.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
+
+# --- Unified severity visual system -----------------------------------------
+# Single source of truth for severity color-coding, applied uniformly across
+# hazard alerts, situation briefs, the Mission Timeline, and App Home.
+SEVERITY_EMOJI: dict[str, str] = {
+    "extreme": "🔴",
+    "severe": "🟠",
+    "high": "🟡",
+    "moderate": "🟢",
+    "low": "⚪",
+}
+
+
+def severity_emoji(severity: str) -> str:
+    """Return the uniform color chip for a severity label."""
+    return SEVERITY_EMOJI.get((severity or "").lower(), "⚪")
+
+
+def severity_label_for_score(score: float | None) -> str:
+    """Map a 0-10 severity score to a severity label (matches ingestion bands)."""
+    if score is None:
+        return "moderate"
+    if score >= 8:
+        return "extreme"
+    if score >= 6:
+        return "severe"
+    if score >= 4:
+        return "high"
+    if score >= 2:
+        return "moderate"
+    return "low"
 
 
 class BlockBuilder:
@@ -22,7 +53,7 @@ class BlockBuilder:
         })
         return self
 
-    def section(self, text: str, *, accessory: Optional[dict] = None) -> BlockBuilder:
+    def section(self, text: str, *, accessory: dict[str, Any] | None = None) -> BlockBuilder:
         block: dict[str, Any] = {
             "type": "section",
             "text": {"type": "mrkdwn", "text": text[:3000]},
@@ -94,8 +125,8 @@ class BlockBuilder:
         action_id: str,
         *,
         value: str = "",
-        style: Optional[str] = None,
-        confirm: Optional[dict] = None,
+        style: str | None = None,
+        confirm: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         btn: dict[str, Any] = {
             "type": "button",
@@ -119,38 +150,31 @@ def hazard_alert_blocks(
     title: str,
     hazard_type: str,
     severity: str,
-    magnitude: Optional[float],
+    magnitude: float | None,
     location: str,
     event_time: str,
     source: str,
     crisis_id: str,
 ) -> list[dict[str, Any]]:
     """Build hazard alert Block Kit surface."""
-    severity_emoji = {
-        "extreme": "🔴", "severe": "🟠", "high": "🟡",
-        "moderate": "🟢", "low": "⚪",
-    }.get(severity.lower(), "⚪")
+    chip = severity_emoji(severity)
 
     b = BlockBuilder()
-    
-    body_text = (
-        f"*Type:* {hazard_type.replace('_', ' ').title()}\n"
-        f"*Magnitude:* {str(magnitude) if magnitude else 'N/A'}\n"
-        f"*Location:* {location}\n"
-        f"*Time:* {event_time}\n"
-        f"*Source:* {source}"
-    )
-    
-    b.card(
-        title=f"{severity_emoji} Hazard Alert: {title[:100]}",
-        subtitle=f"Severity: {severity.upper()}",
-        body=body_text,
-        actions=[
-            b.button("🔍 Investigate", "investigate_hazard", value=crisis_id, style="primary"),
-            b.button("📋 Create Crisis", "create_crisis", value=crisis_id),
-            b.button("🔕 Dismiss", "dismiss_hazard", value=crisis_id),
-        ]
-    )
+    b.header(f"{chip} Hazard Alert: {title[:100]}")
+    b.fields([
+        ("Type", hazard_type.replace("_", " ").title()),
+        ("Severity", f"{chip} {severity.upper()}"),
+        ("Magnitude", str(magnitude) if magnitude else "N/A"),
+        ("Location", location),
+        ("Time", event_time),
+        ("Source", source),
+    ])
+    b.divider()
+    b.actions([
+        b.button("🔍 Investigate", "investigate_hazard", value=crisis_id, style="primary"),
+        b.button("📋 Create Crisis", "create_crisis", value=crisis_id),
+        b.button("🔕 Dismiss", "dismiss_hazard", value=crisis_id),
+    ])
     return b.build()
 
 
@@ -248,7 +272,7 @@ def task_card_blocks(
     title: str,
     status: str,
     assigned_to: str,
-    deadline: Optional[str],
+    deadline: str | None,
     priority: str,
     task_id: str,
 ) -> list[dict[str, Any]]:
@@ -314,7 +338,7 @@ def commitment_confirmation_blocks(
 
 
 def app_home_blocks(
-    active_crises: list[dict],
+    active_crises: list[dict[str, Any]],
     pending_approvals: int,
     at_risk_tasks: int,
     overdue_tasks: int,
@@ -336,22 +360,33 @@ def app_home_blocks(
     ])
     b.divider()
 
-    # Crisis list
+    # Crisis list — most urgent first (highest severity score), then a clear
+    # path from App Home into the live Mission Timeline for each crisis.
     if active_crises:
-        b.section("*Active Crises*")
-        for crisis in active_crises[:10]:
-            severity_emoji = {
-                "extreme": "🔴", "severe": "🟠", "high": "🟡",
-                "moderate": "🟢", "low": "⚪",
-            }.get(crisis.get("severity", "").lower(), "⚪")
+        b.section("*Active Crises* — most urgent first")
+        ordered = sorted(
+            active_crises[:10],
+            key=lambda c: c.get("severity_score", 0.0),
+            reverse=True,
+        )
+        for crisis in ordered:
+            chip = severity_emoji(crisis.get("severity", ""))
             b.section(
-                f"{severity_emoji} *{crisis['title']}*\n"
+                f"{chip} *{crisis['title']}*\n"
                 f"Status: {crisis['status']} | Evidence: {crisis.get('evidence_count', 0)} | "
                 f"Tasks: {crisis.get('task_count', 0)}",
-                accessory=b.button(
-                    "Open", f"open_crisis_{crisis['id']}", value=str(crisis["id"])
-                ),
             )
+            b.actions([
+                b.button(
+                    "📊 Open", f"open_crisis_{crisis['id']}", value=str(crisis["id"])
+                ),
+                b.button(
+                    "🛰️ Mission Timeline",
+                    "view_mission_timeline",
+                    value=str(crisis["id"]),
+                    style="primary",
+                ),
+            ])
     else:
         b.section("_No active crises. Beacon is monitoring hazard feeds._")
 
