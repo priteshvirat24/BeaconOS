@@ -201,7 +201,11 @@ class OpenAIProvider(LLMProvider):
         if self._client is None:
             from openai import OpenAI
 
-            kwargs: dict[str, Any] = {"api_key": self._api_key, "timeout": 30.0}
+            kwargs: dict[str, Any] = {
+                "api_key": self._api_key,
+                "timeout": 30.0,
+                "max_retries": 0,
+            }
             if self._base_url:
                 kwargs["base_url"] = self._base_url
             self._client = OpenAI(**kwargs)
